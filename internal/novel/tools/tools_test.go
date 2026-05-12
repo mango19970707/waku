@@ -1,12 +1,12 @@
-package novel
+package tools
 
 import (
 	"context"
 	"encoding/json"
 	"testing"
+	"waku/internal/novel/repository"
 
 	"waku/internal/model"
-	"waku/internal/novel/tools"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,8 +34,8 @@ func TestSaveOutlineTool(t *testing.T) {
 	ctx := context.Background()
 
 	// 创建工具
-	repo := NewRepository(db)
-	tool, err := tools.NewSaveOutlineTool(db, repo)
+	repo := repository.NewRepository(db)
+	tool, err := NewSaveOutlineTool(db, repo)
 	require.NoError(t, err, "创建工具失败")
 
 	// 准备测试大纲
@@ -93,7 +93,7 @@ func TestSaveOutlineTool(t *testing.T) {
 - 成为斗气大陆最强者`
 
 	// 构建工具输入参数
-	input := tools.SaveOutlineToolInput{
+	input := SaveOutlineToolInput{
 		Title:    "斗破苍穹",
 		Author:   "天蚕土豆",
 		Genre:    "玄幻",
@@ -112,7 +112,7 @@ func TestSaveOutlineTool(t *testing.T) {
 	t.Logf("工具返回结果: %s", resultJSON)
 
 	// 解析返回结果
-	var result tools.SaveOutlineToolOutput
+	var result SaveOutlineToolOutput
 	err = json.Unmarshal([]byte(resultJSON), &result)
 	require.NoError(t, err, "解析返回结果失败")
 
@@ -139,19 +139,19 @@ func TestSaveOutlineToolValidation(t *testing.T) {
 	db := SetupTestDBForTools(t)
 	ctx := context.Background()
 
-	repo := NewRepository(db)
-	tool, err := tools.NewSaveOutlineTool(db, repo)
+	repo := repository.NewRepository(db)
+	tool, err := NewSaveOutlineTool(db, repo)
 	require.NoError(t, err)
 
 	tests := []struct {
 		name        string
-		input       tools.SaveOutlineToolInput
+		input       SaveOutlineToolInput
 		expectError bool
 		errorMsg    string
 	}{
 		{
 			name: "缺少标题",
-			input: tools.SaveOutlineToolInput{
+			input: SaveOutlineToolInput{
 				Author:   "作者",
 				Genre:    "玄幻",
 				Synopsis: "简介",
@@ -162,7 +162,7 @@ func TestSaveOutlineToolValidation(t *testing.T) {
 		},
 		{
 			name: "缺少作者",
-			input: tools.SaveOutlineToolInput{
+			input: SaveOutlineToolInput{
 				Title:    "标题",
 				Genre:    "玄幻",
 				Synopsis: "简介",
@@ -173,7 +173,7 @@ func TestSaveOutlineToolValidation(t *testing.T) {
 		},
 		{
 			name: "缺少类型",
-			input: tools.SaveOutlineToolInput{
+			input: SaveOutlineToolInput{
 				Title:    "标题",
 				Author:   "作者",
 				Synopsis: "简介",
@@ -184,7 +184,7 @@ func TestSaveOutlineToolValidation(t *testing.T) {
 		},
 		{
 			name: "缺少简介",
-			input: tools.SaveOutlineToolInput{
+			input: SaveOutlineToolInput{
 				Title:   "标题",
 				Author:  "作者",
 				Genre:   "玄幻",
@@ -195,7 +195,7 @@ func TestSaveOutlineToolValidation(t *testing.T) {
 		},
 		{
 			name: "缺少大纲",
-			input: tools.SaveOutlineToolInput{
+			input: SaveOutlineToolInput{
 				Title:    "标题",
 				Author:   "作者",
 				Genre:    "玄幻",
@@ -221,7 +221,7 @@ func TestSaveOutlineToolValidation(t *testing.T) {
 				assert.NoError(t, err)
 
 				// 解析返回结果
-				var result tools.SaveOutlineToolOutput
+				var result SaveOutlineToolOutput
 				err = json.Unmarshal([]byte(resultJSON), &result)
 				require.NoError(t, err, "解析返回结果失败")
 

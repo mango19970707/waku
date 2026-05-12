@@ -6,6 +6,8 @@ import (
 	"testing"
 	"waku/internal/config"
 	"waku/internal/novel/agents"
+	"waku/internal/novel/repository"
+	"waku/internal/novel/tools"
 	"waku/internal/utils"
 
 	"github.com/cloudwego/eino/components/model"
@@ -28,8 +30,8 @@ func init() {
 }
 
 func TestGenerateOutlineWithWorkflow(t *testing.T) {
-	db := SetupTestDBForTools(t)
-	repo := NewRepository(db)
+	db := tools.SetupTestDBForTools(t)
+	repo := repository.NewRepository(db)
 	outlineAgent, err := agents.NewOutlineWorkflowAgent(context.Background(), chatModel, db, repo)
 	if err != nil {
 		t.Fatal(err)
