@@ -4,13 +4,17 @@ import (
 	"context"
 	"log/slog"
 	"testing"
+
 	"waku/internal/config"
+	local_model "waku/internal/model"
 	"waku/internal/novel/agents"
 	"waku/internal/novel/repository"
-	"waku/internal/novel/tools"
 	"waku/internal/utils"
 
 	"github.com/cloudwego/eino/components/model"
+	"github.com/stretchr/testify/require"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 var (
@@ -30,7 +34,7 @@ func init() {
 }
 
 func TestGenerateOutlineWithWorkflow(t *testing.T) {
-	db := tools.SetupTestDBForTools(t)
+	db := setupTestDBForTools(t)
 	repo := repository.NewRepository(db)
 	outlineAgent, err := agents.NewOutlineWorkflowAgent(context.Background(), chatModel, db, repo)
 	if err != nil {
@@ -48,4 +52,18 @@ func TestGenerateOutlineWithWorkflow(t *testing.T) {
 	}
 
 	t.Log(rst)
+}
+
+// setupTestDBForTools 创建测试数据库
+func setupTestDBForTools(t *testing.T) *gorm.DB {
+	// 使用项目根目录的 data 目录存储测试数据库
+	dbPath := "../../data/waku.db"
+
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	require.NoError(t, err, "创建测试数据库失败")
+
+	err = db.AutoMigrate(&local_model.Novel{})
+	require.NoError(t, err, "迁移表结构失败")
+
+	return db
 }
