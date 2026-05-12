@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"testing"
-
 	"waku/internal/config"
 	"waku/internal/utils"
 
@@ -28,7 +27,8 @@ func init() {
 }
 
 func TestGenerateOutlineWithWorkflow(t *testing.T) {
-	outlineAgent, err := NewOutlineWorkflowAgent(context.Background(), chatModel)
+	db := SetupTestDBForTools(t)
+	outlineAgent, err := NewOutlineWorkflowAgent(context.Background(), chatModel, db)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,10 +3,14 @@ package novel
 import (
 	"context"
 	"fmt"
+
 	"waku/internal/utils"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/compose"
+	"gorm.io/gorm"
 )
 
 // OutlineGeneratorInput 大纲生成器的输入参数
@@ -123,10 +127,12 @@ func GenerateOutline(ctx context.Context, agent *adk.ChatModelAgent, input *Outl
 // NewOutlinePolisherAgent 创建小说大纲润色 Agent
 //
 // 功能：对已有的小说大纲进行深度润色和优化，提升大纲的质量和吸引力
+// 润色完成后可以使用 save_outline_to_database 工具将大纲保存到数据库
 //
 // 参数：
 //   - ctx: 上下文
 //   - chatModel: 聊天模型实例
+//   - db: 数据库连接（可选，如果提供则添加保存工具）
 //
 // 返回值：
 //   - *adk.ChatModelAgent: 大纲润色 Agent
@@ -134,18 +140,34 @@ func GenerateOutline(ctx context.Context, agent *adk.ChatModelAgent, input *Outl
 //
 // 使用示例：
 //
-//	agent, err := NewOutlinePolisherAgent(ctx, chatModel)
+//	agent, err := NewOutlinePolisherAgent(ctx, chatModel, db)
 //	if err != nil {
 //	    return err
 //	}
-//	result, err := agent.Generate(ctx, input)
-func NewOutlinePolisherAgent(ctx context.Context, chatModel model.BaseChatModel) (*adk.ChatModelAgent, error) {
-	polisherAgent, err := utils.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
+//	result, err := PolishOutline(ctx, agent, input)
+func NewOutlinePolisherAgent(ctx context.Context, chatModel model.BaseChatModel, db *gorm.DB) (*adk.ChatModelAgent, error) {
+	config := &adk.ChatModelAgentConfig{
 		Name:        "OutlinePolisher",
-		Description: "小说大纲润色专家，对大纲进行深度优化和提升",
+		Description: "小说大纲润色专家，对大纲进行深度优化和提升，并可将大纲保存到数据库",
 		Instruction: OutlinePolisherPrompt,
 		Model:       chatModel,
-	})
+	}
+
+	// 如果提供了数据库连接，添加保存工具
+	if db != nil {
+		saveTool, err := NewSaveOutlineTool(db)
+		if err != nil {
+			return nil, fmt.Errorf("创建保存工具失败: %w", err)
+		}
+
+		config.ToolsConfig = adk.ToolsConfig{
+			ToolsNodeConfig: compose.ToolsNodeConfig{
+				Tools: []tool.BaseTool{saveTool},
+			},
+		}
+	}
+
+	polisherAgent, err := utils.NewChatModelAgent(ctx, config)
 	if err != nil {
 		return nil, err
 	}
@@ -305,6 +327,7 @@ func ExpandOutline(ctx context.Context, agent *adk.ChatModelAgent, input *Outlin
 // 参数：
 //   - ctx: 上下文
 //   - chatModel: 聊天模型实例
+//   - db: 数据库连接（可选，如果提供则润色 Agent 可以保存大纲到数据库）
 //
 // 返回值：
 //   - adk.ResumableAgent: 大纲工作流 Agent
@@ -313,16 +336,16 @@ func ExpandOutline(ctx context.Context, agent *adk.ChatModelAgent, input *Outlin
 // 工作流程：
 //  1. 大纲生成：将原始创意扩展为完整大纲
 //  2. 大纲扩写：将大纲扩展为详细的故事框架
-//  3. 大纲润色：对大纲进行深度优化和提升
+//  3. 大纲润色：对大纲进行深度优化和提升（可选保存到数据库）
 //
 // 使用示例：
 //
-//	agent, err := NewOutlineWorkflowAgent(ctx, chatModel)
+//	agent, err := NewOutlineWorkflowAgent(ctx, chatModel, db)
 //	if err != nil {
 //	    return err
 //	}
 //	result, err := agent.Generate(ctx, input)
-func NewOutlineWorkflowAgent(ctx context.Context, chatModel model.BaseChatModel) (adk.ResumableAgent, error) {
+func NewOutlineWorkflowAgent(ctx context.Context, chatModel model.BaseChatModel, db *gorm.DB) (adk.ResumableAgent, error) {
 	// 创建三个子 Agent
 	generatorAgent, err := NewOutlineGeneratorAgent(ctx, chatModel)
 	if err != nil {
@@ -334,7 +357,7 @@ func NewOutlineWorkflowAgent(ctx context.Context, chatModel model.BaseChatModel)
 		return nil, fmt.Errorf("创建大纲扩写 Agent 失败: %w", err)
 	}
 
-	polisherAgent, err := NewOutlinePolisherAgent(ctx, chatModel)
+	polisherAgent, err := NewOutlinePolisherAgent(ctx, chatModel, db)
 	if err != nil {
 		return nil, fmt.Errorf("创建大纲润色 Agent 失败: %w", err)
 	}
@@ -401,7 +424,6 @@ func GenerateOutlineWithWorkflow(ctx context.Context, agent adk.ResumableAgent, 
 
 		// 获取消息内容
 		if event.Output != nil {
-			fmt.Printf(event.AgentName, event.Output)
 			if msg, _, err := adk.GetMessage(event); err == nil {
 				result += msg.Content
 			}

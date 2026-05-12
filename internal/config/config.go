@@ -20,6 +20,7 @@ type Config struct {
 
 // DatabaseConfig 数据库配置
 type DatabaseConfig struct {
+	Driver   string `yaml:"driver"`    // sqlite, postgres
 	Host     string `yaml:"host"`
 	Port     int    `yaml:"port"`
 	User     string `yaml:"user"`
@@ -27,6 +28,7 @@ type DatabaseConfig struct {
 	DBName   string `yaml:"dbname"`
 	SSLMode  string `yaml:"sslmode"`
 	LogLevel string `yaml:"log_level"` // silent, error, warn, info
+	DataPath string `yaml:"data_path"` // SQLite 数据文件路径
 }
 
 // AppConfig 应用配置
@@ -76,6 +78,9 @@ func Load(path string) (*Config, error) {
 	loadFromEnv(&cfg)
 
 	// 设置数据库默认值
+	if cfg.Database.Driver == "" {
+		cfg.Database.Driver = "sqlite"
+	}
 	if cfg.Database.Host == "" {
 		cfg.Database.Host = "localhost"
 	}
@@ -87,6 +92,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Database.LogLevel == "" {
 		cfg.Database.LogLevel = "info"
+	}
+	if cfg.Database.DataPath == "" {
+		cfg.Database.DataPath = "./data/waku.db"
 	}
 
 	// 设置应用默认值
@@ -120,6 +128,9 @@ func Load(path string) (*Config, error) {
 //   - cfg: 配置对象指针
 func loadFromEnv(cfg *Config) {
 	// 数据库配置
+	if v := os.Getenv("DB_DRIVER"); v != "" {
+		cfg.Database.Driver = v
+	}
 	if v := os.Getenv("DB_HOST"); v != "" {
 		cfg.Database.Host = v
 	}
@@ -142,6 +153,9 @@ func loadFromEnv(cfg *Config) {
 	}
 	if v := os.Getenv("DB_LOG_LEVEL"); v != "" {
 		cfg.Database.LogLevel = v
+	}
+	if v := os.Getenv("DB_DATA_PATH"); v != "" {
+		cfg.Database.DataPath = v
 	}
 
 	// 应用配置

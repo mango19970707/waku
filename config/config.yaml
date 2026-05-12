@@ -1,5 +1,8 @@
 # 数据库配置
 database:
+  driver: sqlite  # sqlite 或 postgres
+  data_path: ./data/waku.db  # SQLite 数据文件路径
+  # PostgreSQL 配置（当 driver 为 postgres 时使用）
   host: localhost
   port: 5432
   user: postgres

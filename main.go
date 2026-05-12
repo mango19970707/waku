@@ -27,12 +27,14 @@ func main() {
 
 	// 数据库配置
 	dbCfg := &database.Config{
+		Driver:   cfg.Database.Driver,
 		Host:     cfg.Database.Host,
 		Port:     cfg.Database.Port,
 		User:     cfg.Database.User,
 		Password: cfg.Database.Password,
 		DBName:   cfg.Database.DBName,
 		SSLMode:  cfg.Database.SSLMode,
+		DataPath: cfg.Database.DataPath,
 		LogLevel: cfg.Database.GetLogLevel(),
 	}
 
