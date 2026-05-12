@@ -1,4 +1,4 @@
-package novel
+package tools
 
 import (
 	"context"
@@ -16,6 +16,11 @@ import (
 type SaveOutlineTool struct {
 	db   *gorm.DB
 	repo Repository
+}
+
+// Repository 小说仓储接口
+type Repository interface {
+	Create(novel *model.Novel) error
 }
 
 // SaveOutlineToolInput 保存大纲工具的输入参数
@@ -46,12 +51,11 @@ type SaveOutlineToolOutput struct {
 //
 // 参数：
 //   - db: 数据库连接
+//   - repo: 小说仓储实现
 //
 // 返回值：
 //   - tool.InvokableTool: 可调用的工具
-func NewSaveOutlineTool(db *gorm.DB) (tool.InvokableTool, error) {
-	repo := NewRepository(db)
-
+func NewSaveOutlineTool(db *gorm.DB, repo Repository) (tool.InvokableTool, error) {
 	saveTool := &SaveOutlineTool{
 		db:   db,
 		repo: repo,

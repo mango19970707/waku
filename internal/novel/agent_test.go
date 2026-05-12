@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"testing"
 	"waku/internal/config"
+	"waku/internal/novel/agents"
 	"waku/internal/utils"
 
 	"github.com/cloudwego/eino/components/model"
@@ -28,17 +29,18 @@ func init() {
 
 func TestGenerateOutlineWithWorkflow(t *testing.T) {
 	db := SetupTestDBForTools(t)
-	outlineAgent, err := NewOutlineWorkflowAgent(context.Background(), chatModel, db)
+	repo := NewRepository(db)
+	outlineAgent, err := agents.NewOutlineWorkflowAgent(context.Background(), chatModel, db, repo)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	input := &OutlineGeneratorInput{
+	input := &agents.OutlineGeneratorInput{
 		OriginalOutline: "废柴流",
 		Genre:           "玄幻",
 	}
 
-	rst, err := GenerateOutlineWithWorkflow(context.Background(), outlineAgent, input)
+	rst, err := agents.GenerateOutlineWithWorkflow(context.Background(), outlineAgent, input)
 	if err != nil {
 		t.Fatal(err)
 	}
