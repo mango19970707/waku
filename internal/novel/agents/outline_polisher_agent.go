@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"waku/internal/novel/prompts"
 	"waku/internal/novel/tools"
 	"waku/internal/utils"
@@ -101,13 +102,15 @@ func PolishOutline(ctx context.Context, agent *adk.ChatModelAgent, input *Outlin
 
 请对大纲进行专业的润色，提升其质量和吸引力。`, input.Genre, input.Outline)
 
-	// 创建 Runner 并执行查询
+	// 创建 Runner 并执行查询（启用流式输出）
 	runner := adk.NewRunner(ctx, adk.RunnerConfig{
-		EnableStreaming: false,
+		EnableStreaming: true,
 		Agent:           agent,
 	})
 
 	iter := runner.Query(ctx, query)
+
+	slog.Info("[OutlinePolisher] 开始润色大纲...")
 
 	// 收集响应内容
 	var result string
@@ -124,10 +127,16 @@ func PolishOutline(ctx context.Context, agent *adk.ChatModelAgent, input *Outlin
 		// 获取消息内容
 		if event.Output != nil {
 			if msg, _, err := adk.GetMessage(event); err == nil {
-				result += msg.Content
+				// 打印流式输出的内容
+				if msg.Content != "" {
+					slog.Info(msg.Content)
+					result += msg.Content
+				}
 			}
 		}
 	}
+
+	slog.Info("[OutlinePolisher] 大纲润色完成")
 
 	return result, nil
 }

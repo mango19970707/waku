@@ -2,7 +2,7 @@ package database
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -84,7 +84,7 @@ func Connect(cfg *Config) (*gorm.DB, error) {
 	sqlDB.SetMaxOpenConns(100)     // 最大打开连接数
 	sqlDB.SetConnMaxLifetime(3600) // 连接最大生命周期（秒）
 
-	log.Printf("数据库连接成功 (driver: %s)", cfg.Driver)
+	slog.Info("数据库连接成功", "driver", cfg.Driver)
 	return db, nil
 }
 
@@ -144,6 +144,6 @@ func Close(db *gorm.DB) error {
 		return fmt.Errorf("关闭数据库连接失败: %w", err)
 	}
 
-	log.Println("数据库连接已关闭")
+	slog.Info("数据库连接已关闭")
 	return nil
 }

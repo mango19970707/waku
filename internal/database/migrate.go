@@ -2,7 +2,7 @@ package database
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 
 	"gorm.io/gorm"
 	"waku/internal/model"
@@ -19,7 +19,7 @@ import (
 // 返回值：
 //   - error: 迁移失败时返回错误
 func Migrate(db *gorm.DB) error {
-	log.Println("开始执行数据库迁移...")
+	slog.Info("开始执行数据库迁移...")
 
 	// 定义需要迁移的所有模型
 	models := []interface{}{
@@ -37,7 +37,7 @@ func Migrate(db *gorm.DB) error {
 		return fmt.Errorf("数据库迁移失败: %w", err)
 	}
 
-	log.Println("数据库迁移完成")
+	slog.Info("数据库迁移完成")
 	return nil
 }
 
@@ -49,7 +49,7 @@ func Migrate(db *gorm.DB) error {
 // 返回值：
 //   - error: 删除失败时返回错误
 func DropAllTables(db *gorm.DB) error {
-	log.Println("警告：正在删除所有表...")
+	slog.Warn("警告：正在删除所有表...")
 
 	// 定义需要删除的所有模型（按依赖关系逆序）
 	models := []interface{}{
@@ -67,7 +67,7 @@ func DropAllTables(db *gorm.DB) error {
 		return fmt.Errorf("删除表失败: %w", err)
 	}
 
-	log.Println("所有表已删除")
+	slog.Info("所有表已删除")
 	return nil
 }
 
@@ -79,7 +79,7 @@ func DropAllTables(db *gorm.DB) error {
 // 返回值：
 //   - error: 重置失败时返回错误
 func ResetDatabase(db *gorm.DB) error {
-	log.Println("开始重置数据库...")
+	slog.Info("开始重置数据库...")
 
 	// 删除所有表
 	if err := DropAllTables(db); err != nil {
@@ -91,6 +91,6 @@ func ResetDatabase(db *gorm.DB) error {
 		return err
 	}
 
-	log.Println("数据库重置完成")
+	slog.Info("数据库重置完成")
 	return nil
 }
