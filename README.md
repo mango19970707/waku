@@ -1,6 +1,16 @@
 # Waku - AI 小说生成 Agent
 
-一个基于 AI 的智能小说创作系统，通过 Agent 架构实现小说的自动化生成和管理。
+一个基于 AI 的智能小说创作系统，通过 Agent 架构和工作流编排实现小说大纲的自动化生成、优化和管理。
+
+## 核心特性
+
+- **智能大纲生成**：基于用户输入自动生成完整的小说大纲
+- **多阶段优化**：生成 → 扩写 → 润色，逐步提升大纲质量
+- **结构化提取**：自动提取标题、简介、世界观、修行体系等关键信息
+- **大纲修改**：根据用户建议智能修改已有大纲
+- **断点续传**：支持工作流中断后从上次位置继续
+- **中断恢复**：保存前需用户审批，防止误操作
+- **多模型支持**：支持 OpenAI、Azure OpenAI、Ollama、Ark、Anthropic Claude
 
 ## 快速开始
 
@@ -26,22 +36,25 @@ cp .env.example .env
 
 ```bash
 # 数据库配置
+DB_DRIVER=sqlite                    # 或 postgres
 DB_HOST=localhost
 DB_PORT=5432
 DB_USER=postgres
-DB_PASSWORD=your_password  # 修改为你的数据库密码
+DB_PASSWORD=your_password           # 修改为你的数据库密码
 DB_NAME=waku
 DB_SSLMODE=disable
 DB_LOG_LEVEL=info
+DB_DATA_PATH=./data/waku.db         # SQLite 数据库文件路径
 
 # 应用配置
 APP_PORT=8080
 APP_ENV=development
 
 # AI 模型配置
-MODEL_PROVIDER=openai
-MODEL_API_KEY=your_openai_api_key  # 修改为你的 API 密钥
-MODEL_NAME=gpt-4
+MODEL_PROVIDER=openai               # openai/azure/ollama/ark/anthropic
+MODEL_API_KEY=your_openai_api_key   # 修改为你的 API 密钥
+MODEL_BASE_URL=                     # 可选，自定义 API 地址
+MODEL_NAME=gpt-4                    # 模型名称
 MODEL_TIMEOUT=60s
 MODEL_MAX_TOKENS=2000
 MODEL_TEMPERATURE=0.7
@@ -54,13 +67,15 @@ MODEL_TEMPERATURE=0.7
 ```yaml
 # 数据库配置
 database:
+  driver: sqlite                    # 或 postgres
   host: localhost
   port: 5432
   user: postgres
-  password: your_password  # 修改为你的数据库密码
+  password: your_password           # 修改为你的数据库密码
   dbname: waku
   sslmode: disable
   log_level: info
+  data_path: ./data/waku.db         # SQLite 数据库文件路径
 
 # 应用配置
 app:
@@ -69,9 +84,10 @@ app:
 
 # AI 模型配置
 model:
-  provider: openai
-  api_key: your_api_key  # 修改为你的 API 密钥
-  model: gpt-4
+  provider: openai                  # openai/azure/ollama/ark/anthropic
+  api_key: your_api_key             # 修改为你的 API 密钥
+  base_url: ""                      # 可选，自定义 API 地址
+  model: gpt-4                      # 模型名称
   timeout: 60s
   max_tokens: 2000
   temperature: 0.7
@@ -79,13 +95,15 @@ model:
 
 **注意**：环境变量的优先级高于 config.yaml 文件。如果同时设置了环境变量和 YAML 配置，将使用环境变量的值。
 
-### 3. 创建数据库
+### 3. 创建数据库（仅 PostgreSQL）
 
-在 PostgreSQL 中创建数据库：
+如果使用 PostgreSQL，需要先创建数据库：
 
 ```sql
 CREATE DATABASE waku;
 ```
+
+如果使用 SQLite，程序会自动创建数据库文件。
 
 ### 4. 执行数据库迁移
 
@@ -110,71 +128,114 @@ go run main.go
 
 ```
 waku/
-├── main.go                  # 程序入口
-├── go.mod                   # Go 模块依赖
-├── .env                     # 环境变量配置（不提交到 Git）
-├── .env.example             # 环境变量配置示例
-├── .gitignore               # Git 忽略文件
-├── config/                  # 配置文件目录
-│   ├── config.yaml          # 应用配置
-│   └── config.yaml.example  # 配置示例
-├── internal/                # 内部业务逻辑
-│   ├── config/              # 配置加载
-│   │   └── config.go        # 配置结构和加载逻辑
-│   ├── database/            # 数据库连接和迁移
-│   │   ├── database.go      # 数据库连接
-│   │   └── migrate.go       # 数据库迁移
-│   ├── model/               # 数据模型定义
-│   │   ├── types.go         # 自定义类型（JSON 数组支持）
-│   │   ├── novel.go         # 小说模型
-│   │   ├── volume.go        # 分卷模型
-│   │   ├── chapter.go       # 章节模型
-│   │   ├── abstract.go      # 大纲模型
-│   │   ├── character.go     # 角色模型
-│   │   ├── plotline.go      # 剧情线模型
-│   │   └── memory.go        # 记忆模型
-│   ├── utils/               # 工具函数
-│   │   ├── chat_model.go    # ChatModel 封装
-│   │   └── config_helper.go # 配置辅助函数
-│   ├── abstract/            # 章节大纲模块
-│   ├── chapter/             # 章节内容模块
-│   ├── character/           # 角色管理模块
-│   ├── memory/              # 记忆系统模块
-│   ├── plotline/            # 剧情管理模块
-│   └── volume/              # 分卷管理模块
-└── docs/                    # 项目文档
+├── main.go                          # 程序入口
+├── go.mod                           # Go 模块依赖
+├── .env                             # 环境变量配置（不提交到 Git）
+├── .env.example                     # 环境变量配置示例
+├── .gitignore                       # Git 忽略文件
+├── config/                          # 配置文件目录
+│   ├── config.yaml                  # 应用配置
+│   └── config.yaml.example          # 配置示例
+├── data/                            # 数据存储目录
+│   ├── waku.db                      # SQLite 数据库文件
+│   └── content/                     # 小说内容文件
+│       └── {novelID-novelName}/     # 每个小说的目录
+│           └── abstract/            # 大纲文件
+│               ├── 生成.md
+│               ├── 扩写.md
+│               ├── 润色.md
+│               └── 修改.md
+└── internal/                        # 内部业务逻辑
+    ├── config/                      # 配置加载
+    │   └── config.go                # 配置结构和加载逻辑
+    ├── database/                    # 数据库连接和迁移
+    │   ├── database.go              # 数据库连接
+    │   └── migrate.go               # 数据库迁移
+    ├── model/                       # 数据模型定义
+    │   ├── types.go                 # 自定义类型（StringArray）
+    │   └── novel.go                 # 小说模型
+    ├── utils/                       # 通用工具函数
+    │   ├── chat_model.go            # ChatModel 封装
+    │   ├── file.go                  # 文件操作
+    │   └── agent.go                 # Agent 创建工厂
+    └── novel/                       # 小说管理核心模块
+        ├── agents/                  # AI Agent 实现
+        │   ├── outline_generator_agent.go      # 大纲生成 Agent
+        │   ├── outline_expander_agent.go       # 大纲扩写 Agent
+        │   ├── outline_polisher_agent.go       # 大纲润色 Agent
+        │   ├── outline_extractor_agent.go      # 信息提取 Agent
+        │   └── outline_reviser_agent.go        # 大纲修改 Agent
+        ├── compose/                 # 工作流编排
+        │   ├── outline_generate_workflow.go    # 大纲生成工作流
+        │   ├── outline_revision_workflow.go    # 大纲修改工作流
+        │   ├── nodes.go                        # 工作流节点实现
+        │   ├── router.go                       # 工作流路由逻辑
+        │   └── agent_executor.go               # Agent 执行器
+        ├── prompts/                 # Agent 系统提示词
+        │   ├── outline_generator_prompt.go
+        │   ├── outline_expander_prompt.go
+        │   ├── outline_polisher_prompt.go
+        │   ├── outline_extractor_prompt.go
+        │   ├── outline_reviser_prompt.go
+        │   └── outline_revision_prompt.go
+        ├── tools/                   # 工具定义
+        │   └── save_outline_tool.go            # 保存大纲工具
+        ├── repository/              # 数据仓储
+        │   └── novel_repository.go             # 小说数据访问
+        └── utils/                   # 工具函数
+            └── file.go                         # 文件操作
 ```
 
-## 数据模型
+## 核心工作流
 
-### Novel（小说）
-- 小说基本信息：标题、作者、类型、简介、状态
+### 大纲生成工作流
 
-### Volume（分卷）
-- 分卷信息：标题、序号、简介
+```
+用户输入（小说名称、类型、原始大纲）
+    ↓
+[初始化] 创建工作流状态
+    ↓
+[生成] OutlineGeneratorAgent 生成完整大纲
+    ↓ 保存到 data/content/{name}/abstract/生成.md
+[扩写] OutlineExpanderAgent 扩写大纲细节
+    ↓ 保存到 data/content/{name}/abstract/扩写.md
+[润色] OutlinePolisherAgent 润色和优化大纲
+    ↓ 保存到 data/content/{name}/abstract/润色.md
+[提取] OutlineExtractorAgent 提取结构化信息
+    ↓ 输出 JSON（标题、简介、世界观、修行体系等）
+[保存] 保存到数据库（需用户审批）
+    ↓
+完成（返回小说 ID）
+```
 
-### Chapter（章节）
-- 章节信息：标题、内容、字数、状态
+**特性：**
+- 每个节点失败自动重试 3 次
+- 支持断点续传（文件已存在则跳过）
+- 保存前需用户审批（中断恢复机制）
 
-### Abstract（章节大纲）
-- 大纲信息：摘要、关键要点、涉及角色和剧情线
+### 大纲修改工作流
 
-### Character（角色）
-- 角色信息：名称、定位、外貌、性格、背景
-
-### Plotline（剧情线）
-- 剧情线信息：标题、类型（主线/支线）、描述、状态
-
-### Memory（记忆）
-- 记忆信息：类型（事件/状态/设定）、内容、重要程度
+```
+用户输入（小说 ID、修改建议）
+    ↓
+[加载] 从数据库加载现有小说
+    ↓
+[修改] OutlineReviserAgent 根据建议修改大纲
+    ↓ 保存到 data/content/{name}/abstract/修改.md
+[提取] OutlineExtractorAgent 提取修改后的信息
+    ↓
+[更新] 更新数据库
+    ↓
+完成
+```
 
 ## 技术栈
 
-- **语言**: Go 1.25
-- **数据库**: PostgreSQL
-- **ORM**: GORM
-- **配置**: YAML
-- **AI 模型**: 支持 OpenAI、Azure OpenAI、Ollama、Ark、Anthropic
+- **语言**: Go 1.25.0
+- **核心框架**: Cloudwego Eino v0.8.13（Agent 和 Workflow 编排）
+- **数据库**: GORM + SQLite/PostgreSQL
+- **配置**: YAML + 环境变量
+- **AI 模型**: 支持 OpenAI、Azure OpenAI、Ollama、Ark、Anthropic Claude
 
 ## 开发规范
 
