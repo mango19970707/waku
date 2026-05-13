@@ -1,4 +1,4 @@
-package agents
+package compose
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"waku/internal/model"
-	"waku/internal/novel/compose"
 	"waku/internal/utils"
 
 	einoModel "github.com/cloudwego/eino/components/model"
@@ -148,7 +147,7 @@ func TestOutlineWorkflowGraph_Success(t *testing.T) {
 	repo := newMockRepository()
 
 	// 构建 Graph
-	graph, err := compose.BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
+	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}
@@ -156,7 +155,7 @@ func TestOutlineWorkflowGraph_Success(t *testing.T) {
 	t.Log("=== 测试场景：完整的成功流程 ===")
 
 	// 准备输入
-	input := &compose.OutlineWorkflowInput{
+	input := &OutlineWorkflowInput{
 		NovelName:       "测试小说",
 		Genre:           "玄幻",
 		OriginalOutline: "一个少年的修仙之路",
@@ -166,7 +165,7 @@ func TestOutlineWorkflowGraph_Success(t *testing.T) {
 	defer cleanupTestFiles(input.NovelName)
 
 	// 执行工作流
-	result, err := compose.ExecuteOutlineWorkflow(ctx, graph, input)
+	result, err := ExecuteOutlineWorkflow(ctx, graph, input)
 	if err != nil {
 		t.Fatalf("执行工作流失败: %v", err)
 	}
@@ -217,7 +216,7 @@ func TestOutlineWorkflowGraph_RetryOnFailure(t *testing.T) {
 	repo := newMockRepository()
 
 	// 构建 Graph
-	graph, err := compose.BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
+	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}
@@ -225,7 +224,7 @@ func TestOutlineWorkflowGraph_RetryOnFailure(t *testing.T) {
 	t.Log("=== 测试场景：失败重试机制（前2次失败，第3次成功） ===")
 
 	// 准备输入
-	input := &compose.OutlineWorkflowInput{
+	input := &OutlineWorkflowInput{
 		NovelName:       "重试测试小说",
 		Genre:           "都市",
 		OriginalOutline: "一个程序员的逆袭之路",
@@ -235,7 +234,7 @@ func TestOutlineWorkflowGraph_RetryOnFailure(t *testing.T) {
 	defer cleanupTestFiles(input.NovelName)
 
 	// 执行工作流
-	result, err := compose.ExecuteOutlineWorkflow(ctx, graph, input)
+	result, err := ExecuteOutlineWorkflow(ctx, graph, input)
 	if err != nil {
 		t.Fatalf("执行工作流失败: %v", err)
 	}
@@ -260,7 +259,7 @@ func TestOutlineWorkflowGraph_MaxRetriesExceeded(t *testing.T) {
 	repo := newMockRepository()
 
 	// 构建 Graph
-	graph, err := compose.BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
+	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}
@@ -268,7 +267,7 @@ func TestOutlineWorkflowGraph_MaxRetriesExceeded(t *testing.T) {
 	t.Log("=== 测试场景：超过最大重试次数 ===")
 
 	// 准备输入
-	input := &compose.OutlineWorkflowInput{
+	input := &OutlineWorkflowInput{
 		NovelName:       "失败测试小说",
 		Genre:           "科幻",
 		OriginalOutline: "星际探险故事",
@@ -278,7 +277,7 @@ func TestOutlineWorkflowGraph_MaxRetriesExceeded(t *testing.T) {
 	defer cleanupTestFiles(input.NovelName)
 
 	// 执行工作流（应该失败）
-	_, err = compose.ExecuteOutlineWorkflow(ctx, graph, input)
+	_, err = ExecuteOutlineWorkflow(ctx, graph, input)
 	if err == nil {
 		t.Fatal("期望执行失败，但成功了")
 	}
@@ -298,7 +297,7 @@ func TestOutlineWorkflowGraph_ResumeFromCheckpoint(t *testing.T) {
 	repo := newMockRepository()
 
 	// 构建 Graph
-	graph, err := compose.BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
+	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}
@@ -306,7 +305,7 @@ func TestOutlineWorkflowGraph_ResumeFromCheckpoint(t *testing.T) {
 	t.Log("=== 测试场景：断点续传 ===")
 
 	// 准备输入
-	input := &compose.OutlineWorkflowInput{
+	input := &OutlineWorkflowInput{
 		NovelName:       "断点续传测试",
 		Genre:           "武侠",
 		OriginalOutline: "江湖恩怨录",
@@ -317,7 +316,7 @@ func TestOutlineWorkflowGraph_ResumeFromCheckpoint(t *testing.T) {
 
 	// 第一次执行：完整流程
 	t.Log("\n--- 第一次执行：完整流程 ---")
-	result1, err := compose.ExecuteOutlineWorkflow(ctx, graph, input)
+	result1, err := ExecuteOutlineWorkflow(ctx, graph, input)
 	if err != nil {
 		t.Fatalf("第一次执行失败: %v", err)
 	}
@@ -330,7 +329,7 @@ func TestOutlineWorkflowGraph_ResumeFromCheckpoint(t *testing.T) {
 
 	// 第二次执行：应该从文件加载，不调用模型
 	t.Log("\n--- 第二次执行：断点续传 ---")
-	result2, err := compose.ExecuteOutlineWorkflow(ctx, graph, input)
+	result2, err := ExecuteOutlineWorkflow(ctx, graph, input)
 	if err != nil {
 		t.Fatalf("第二次执行失败: %v", err)
 	}
@@ -373,7 +372,7 @@ func TestOutlineWorkflowGraph_PartialResume(t *testing.T) {
 	t.Log("=== 测试场景：部分断点续传（只有生成阶段的文件） ===")
 
 	// 准备输入
-	input := &compose.OutlineWorkflowInput{
+	input := &OutlineWorkflowInput{
 		NovelName:       "部分断点测试",
 		Genre:           "奇幻",
 		OriginalOutline: "魔法世界的冒险",
@@ -389,13 +388,13 @@ func TestOutlineWorkflowGraph_PartialResume(t *testing.T) {
 	}
 
 	// 构建 Graph
-	graph, err := compose.BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
+	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}
 
 	// 执行工作流
-	result, err := compose.ExecuteOutlineWorkflow(ctx, graph, input)
+	result, err := ExecuteOutlineWorkflow(ctx, graph, input)
 	if err != nil {
 		t.Fatalf("执行工作流失败: %v", err)
 	}
@@ -428,7 +427,7 @@ func TestOutlineWorkflowGraph_InvalidInput(t *testing.T) {
 	repo := newMockRepository()
 
 	// 构建 Graph
-	graph, err := compose.BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
+	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}
@@ -437,11 +436,11 @@ func TestOutlineWorkflowGraph_InvalidInput(t *testing.T) {
 
 	testCases := []struct {
 		name  string
-		input *compose.OutlineWorkflowInput
+		input *OutlineWorkflowInput
 	}{
 		{
 			name: "小说名称为空",
-			input: &compose.OutlineWorkflowInput{
+			input: &OutlineWorkflowInput{
 				NovelName:       "",
 				Genre:           "玄幻",
 				OriginalOutline: "测试大纲",
@@ -449,7 +448,7 @@ func TestOutlineWorkflowGraph_InvalidInput(t *testing.T) {
 		},
 		{
 			name: "小说类型为空",
-			input: &compose.OutlineWorkflowInput{
+			input: &OutlineWorkflowInput{
 				NovelName:       "测试小说",
 				Genre:           "",
 				OriginalOutline: "测试大纲",
@@ -457,7 +456,7 @@ func TestOutlineWorkflowGraph_InvalidInput(t *testing.T) {
 		},
 		{
 			name: "原始大纲为空",
-			input: &compose.OutlineWorkflowInput{
+			input: &OutlineWorkflowInput{
 				NovelName:       "测试小说",
 				Genre:           "玄幻",
 				OriginalOutline: "",
@@ -467,7 +466,7 @@ func TestOutlineWorkflowGraph_InvalidInput(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := compose.ExecuteOutlineWorkflow(ctx, graph, tc.input)
+			_, err := ExecuteOutlineWorkflow(ctx, graph, tc.input)
 			if err == nil {
 				t.Error("期望执行失败，但成功了")
 			}
