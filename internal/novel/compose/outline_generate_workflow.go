@@ -73,6 +73,7 @@ type AgentExecutor interface {
 	ExpandOutline(ctx context.Context, chatModel einoModel.BaseChatModel, briefOutline, genre string) (string, error)
 	PolishOutline(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre string) (string, error)
 	ExtractOutlineInfo(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, novelName string) (*OutlineExtractorOutput, error)
+	ReviseOutline(ctx context.Context, chatModel einoModel.BaseChatModel, originalOutline, userSuggestion, genre string) (string, error)
 }
 
 // defaultAgentExecutor 默认的 Agent 执行器实现
@@ -96,6 +97,10 @@ func (e *defaultAgentExecutor) PolishOutline(ctx context.Context, chatModel eino
 
 func (e *defaultAgentExecutor) ExtractOutlineInfo(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, novelName string) (*OutlineExtractorOutput, error) {
 	return nil, fmt.Errorf("agent executor not implemented")
+}
+
+func (e *defaultAgentExecutor) ReviseOutline(ctx context.Context, chatModel einoModel.BaseChatModel, originalOutline, userSuggestion, genre string) (string, error) {
+	return "", fmt.Errorf("agent executor not implemented")
 }
 
 // RegisterAgentExecutor 注册 Agent 执行器（由 agents 包调用）

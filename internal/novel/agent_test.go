@@ -33,7 +33,7 @@ func init() {
 	}
 }
 
-func TestOutlineWorkflowGraph_Success(t *testing.T) {
+func TestOutlineGenerateWorkflowGraph(t *testing.T) {
 	ctx := context.Background()
 
 	// 创建测试数据库
@@ -57,6 +57,36 @@ func TestOutlineWorkflowGraph_Success(t *testing.T) {
 
 	// 执行工作流
 	_, err = compose.ExecuteOutlineWorkflow(ctx, graph, input)
+	if err != nil {
+		t.Fatalf("执行工作流失败: %v", err)
+	}
+
+	t.Log("✓ 完整流程测试通过")
+}
+
+func TestOutlineRevisionWorkflowGraph(t *testing.T) {
+	ctx := context.Background()
+
+	// 创建测试数据库
+	db := setupTestDBForTools(t)
+	repo := repository.NewRepository(db)
+
+	// 构建 Graph
+	graph, err := compose.BuildOutlineRevisionWorkflowGraph(ctx, chatModel, db, repo)
+	if err != nil {
+		t.Fatalf("构建 Graph 失败: %v", err)
+	}
+
+	t.Log("=== 测试场景：完整的成功流程 ===")
+
+	// 准备输入
+	input := &compose.OutlineRevisionWorkflowInput{
+		NovelID:        1,
+		UserSuggestion: "修行体系改为和《斗破苍穹》一样",
+	}
+
+	// 执行工作流
+	_, err = compose.ExecuteOutlineRevisionWorkflow(ctx, graph, input)
 	if err != nil {
 		t.Fatalf("执行工作流失败: %v", err)
 	}

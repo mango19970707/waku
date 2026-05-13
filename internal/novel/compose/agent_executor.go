@@ -80,6 +80,21 @@ func (e *agentExecutorImpl) ExtractOutlineInfo(ctx context.Context, chatModel ei
 	}, nil
 }
 
+func (e *agentExecutorImpl) ReviseOutline(ctx context.Context, chatModel einoModel.BaseChatModel, originalOutline, userSuggestion, genre string) (string, error) {
+	agent, err := agents.NewOutlineReviserAgent(ctx, chatModel)
+	if err != nil {
+		return "", fmt.Errorf("创建修改 Agent 失败: %w", err)
+	}
+
+	input := &agents.OutlineReviserInput{
+		OriginalOutline: originalOutline,
+		UserSuggestion:  userSuggestion,
+		Genre:           genre,
+	}
+
+	return agents.ReviseOutline(ctx, agent, input)
+}
+
 // 在包初始化时注册 Agent 执行器
 func init() {
 	RegisterAgentExecutor(&agentExecutorImpl{})

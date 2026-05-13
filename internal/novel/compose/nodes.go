@@ -364,3 +364,139 @@ func saveToDBNode(db *gorm.DB, repo tools.Repository) func(context.Context, *Out
 		return state, nil
 	}
 }
+
+// ==================== revision节点实现 ====================
+
+// initRevisionNode 初始化修改工作流节点（从数据库加载小说信息）
+func initRevisionNode(db *gorm.DB) func(context.Context, *OutlineRevisionWorkflowInput) (*OutlineRevisionWorkflowState, error) {
+	return func(ctx context.Context, input *OutlineRevisionWorkflowInput) (*OutlineRevisionWorkflowState, error) {
+		fmt.Printf("\n🤖 [初始化] 从数据库加载小说信息...\n")
+
+		// 查询小说信息
+		var novel model.Novel
+		if err := db.First(&novel, input.NovelID).Error; err != nil {
+			return nil, fmt.Errorf("查询小说失败: %w", err)
+		}
+
+		state := &OutlineRevisionWorkflowState{
+			CurrentNode:     "init",
+			NovelID:         novel.ID,
+			NovelName:       novel.Title,
+			Genre:           novel.Genre,
+			OriginalOutline: novel.Outline,
+			UserSuggestion:  input.UserSuggestion,
+			MaxRetries:      3, // 默认最大重试次数为3
+		}
+
+		fmt.Printf("  ✓ 小说信息加载完成\n")
+		fmt.Printf("    - 标题: %s\n", novel.Title)
+		fmt.Printf("    - 类型: %s\n", novel.Genre)
+		fmt.Printf("    - 大纲长度: %d 字符\n", len(novel.Outline))
+
+		return state, nil
+	}
+}
+
+// reviseNode 修改大纲节点
+func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *OutlineRevisionWorkflowState) (*OutlineRevisionWorkflowState, error) {
+	return func(ctx context.Context, state *OutlineRevisionWorkflowState) (*OutlineRevisionWorkflowState, error) {
+		fmt.Printf("\n🤖 [修改] 开始根据用户建议修改大纲...\n")
+
+		// 执行修改
+		result, err := agentExecutor.ReviseOutline(ctx, chatModel, state.OriginalOutline, state.UserSuggestion, state.Genre)
+		if err != nil {
+			state.ErrorMsg = fmt.Sprintf("修改大纲失败: %v", err)
+			state.CurrentNode = "revise_failed"
+			return state, nil
+		}
+
+		// 保存结果
+		state.RevisedOutline = result
+
+		// 保存到文件
+		if err := utils.SaveToFile(state.NovelID, state.NovelName, "修改", result); err != nil {
+			state.ErrorMsg = fmt.Sprintf("保存文件失败: %v", err)
+			state.CurrentNode = "revise_failed"
+			return state, nil
+		}
+
+		fmt.Printf("  ✓ 大纲修改完成，已保存到文件\n")
+		state.CurrentNode = "revise_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+// extractRevisionNode 提取修改后的大纲信息节点
+func extractRevisionNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *OutlineRevisionWorkflowState) (*OutlineRevisionWorkflowState, error) {
+	return func(ctx context.Context, state *OutlineRevisionWorkflowState) (*OutlineRevisionWorkflowState, error) {
+		fmt.Printf("\n🤖 [提取] 开始提取大纲信息...\n")
+
+		// 如果已经提取过，跳过
+		if state.ExtractedInfo != nil {
+			fmt.Printf("  ✓ 已提取信息\n")
+			state.CurrentNode = "extract_success"
+			return state, nil
+		}
+
+		// 执行提取
+		result, err := agentExecutor.ExtractOutlineInfo(ctx, chatModel, state.RevisedOutline, state.Genre, state.NovelName)
+		if err != nil {
+			state.ErrorMsg = fmt.Sprintf("提取大纲信息失败: %v", err)
+			state.CurrentNode = "extract_failed"
+			return state, nil
+		}
+
+		// 保存结果
+		state.ExtractedInfo = result
+
+		fmt.Printf("  ✓ 信息提取完成\n")
+		fmt.Printf("    - 标题: %s\n", result.NovelTitle)
+		fmt.Printf("    - 简介: %s\n", result.Synopsis[:utils.Min(50, len(result.Synopsis))])
+		state.CurrentNode = "extract_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+// updateDBNode 更新数据库节点
+func updateDBNode(db *gorm.DB) func(context.Context, *OutlineRevisionWorkflowState) (*OutlineRevisionWorkflowState, error) {
+	return func(ctx context.Context, state *OutlineRevisionWorkflowState) (*OutlineRevisionWorkflowState, error) {
+		fmt.Printf("\n🤖 [更新] 开始更新数据库...\n")
+
+		// 检查是否已提取信息
+		if state.ExtractedInfo == nil {
+			state.ErrorMsg = "未提取大纲信息，无法更新数据库"
+			state.CurrentNode = "update_failed"
+			return state, nil
+		}
+
+		// 查询已有小说
+		var existingNovel model.Novel
+		if err := db.First(&existingNovel, state.NovelID).Error; err != nil {
+			state.ErrorMsg = fmt.Sprintf("查询小说失败: %v", err)
+			state.CurrentNode = "update_failed"
+			return state, nil
+		}
+
+		// 更新字段
+		existingNovel.Title = state.ExtractedInfo.NovelTitle
+		existingNovel.Genre = state.Genre
+		existingNovel.Synopsis = state.ExtractedInfo.Synopsis
+		existingNovel.Outline = state.ExtractedInfo.Outline
+		existingNovel.Worldview = state.ExtractedInfo.Worldview
+		existingNovel.CultivationSystem = state.ExtractedInfo.CultivationSystem
+
+		// 保存更新
+		if err := db.Save(&existingNovel).Error; err != nil {
+			state.ErrorMsg = fmt.Sprintf("更新小说失败: %v", err)
+			state.CurrentNode = "update_failed"
+			return state, nil
+		}
+
+		fmt.Printf("  ✓ 更新成功，小说ID: %d\n", existingNovel.ID)
+		state.CurrentNode = "update_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}

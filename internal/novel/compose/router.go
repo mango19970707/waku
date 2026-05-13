@@ -102,3 +102,44 @@ func routeAfterSave(ctx context.Context, state *OutlineWorkflowState) (string, e
 	fmt.Printf("  ⚠️  保存失败，重试 %d/%d: %s\n", state.RetryCount, state.MaxRetries, state.ErrorMsg)
 	return "saveToDB", nil
 }
+
+// ==================== revision路由函数 ====================
+
+// routeAfterRevise 修改节点后的路由
+func routeAfterRevise(ctx context.Context, state *OutlineRevisionWorkflowState) (string, error) {
+	if state.CurrentNode == "revise_failed" {
+		if state.RetryCount < state.MaxRetries {
+			state.RetryCount++
+			fmt.Printf("  ⚠️  修改失败，重试 %d/%d: %s\n", state.RetryCount, state.MaxRetries, state.ErrorMsg)
+			return "revise", nil
+		}
+		return compose.END, fmt.Errorf("修改大纲失败（已重试%d次）: %s", state.MaxRetries, state.ErrorMsg)
+	}
+	return "extract", nil
+}
+
+// routeAfterExtractRevision 提取节点后的路由
+func routeAfterExtractRevision(ctx context.Context, state *OutlineRevisionWorkflowState) (string, error) {
+	if state.CurrentNode == "extract_failed" {
+		if state.RetryCount < state.MaxRetries {
+			state.RetryCount++
+			fmt.Printf("  ⚠️  提取失败，重试 %d/%d: %s\n", state.RetryCount, state.MaxRetries, state.ErrorMsg)
+			return "extract", nil
+		}
+		return compose.END, fmt.Errorf("提取大纲信息失败（已重试%d次）: %s", state.MaxRetries, state.ErrorMsg)
+	}
+	return "update", nil
+}
+
+// routeAfterUpdate 更新节点后的路由
+func routeAfterUpdate(ctx context.Context, state *OutlineRevisionWorkflowState) (string, error) {
+	if state.CurrentNode == "update_failed" {
+		if state.RetryCount < state.MaxRetries {
+			state.RetryCount++
+			fmt.Printf("  ⚠️  更新失败，重试 %d/%d: %s\n", state.RetryCount, state.MaxRetries, state.ErrorMsg)
+			return "update", nil
+		}
+		return compose.END, fmt.Errorf("更新数据库失败（已重试%d次）: %s", state.MaxRetries, state.ErrorMsg)
+	}
+	return compose.END, nil
+}
