@@ -9,6 +9,7 @@ import (
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/schema"
 )
 
 // OutlineExtractorInput 大纲信息提取器的输入参数
@@ -24,15 +25,15 @@ type OutlineExtractorInput struct {
 // OutlineExtractorOutput 大纲信息提取器的输出结果
 type OutlineExtractorOutput struct {
 	// NovelTitle 小说标题
-	NovelTitle string
+	NovelTitle string `json:"novel_title"`
 	// Synopsis 小说简介
-	Synopsis string
+	Synopsis string `json:"synopsis"`
 	// Outline 完整的大纲内容
-	Outline string
+	Outline string `json:"outline"`
 	// Worldview 世界观设定
-	Worldview string
+	Worldview string `json:"worldview"`
 	// CultivationSystem 修行体系
-	CultivationSystem string
+	CultivationSystem string `json:"cultivation_system"`
 }
 
 // NewOutlineExtractorAgent 创建小说大纲信息提取 Agent
@@ -89,7 +90,7 @@ func ExtractOutlineInfo(ctx context.Context, agent *adk.ChatModelAgent, input *O
 **大纲内容**：
 %s
 
-请提取以下信息并按照指定格式输出。`, input.Genre,
+请提取以下信息并按照 JSON 格式输出。`, input.Genre,
 		func() string {
 			if input.NovelName != "" {
 				return fmt.Sprintf("\n**小说名称**：%s（如果大纲中有标题，优先使用大纲中的标题）", input.NovelName)
@@ -97,6 +98,12 @@ func ExtractOutlineInfo(ctx context.Context, agent *adk.ChatModelAgent, input *O
 			return ""
 		}(),
 		input.Outline)
+
+	// 创建 JSON 解析器
+	parserConfig := &schema.MessageJSONParseConfig{
+		ParseFrom: schema.MessageParseFromContent,
+	}
+	parser := schema.NewMessageJSONParser[OutlineExtractorOutput](parserConfig)
 
 	// 创建 Runner 并执行查询（启用流式输出）
 	runner := adk.NewRunner(ctx, adk.RunnerConfig{
@@ -110,6 +117,7 @@ func ExtractOutlineInfo(ctx context.Context, agent *adk.ChatModelAgent, input *O
 
 	// 收集响应内容
 	var result string
+	var lastMessage *schema.Message
 	for {
 		event, ok := iter.Next()
 		if !ok {
@@ -128,40 +136,29 @@ func ExtractOutlineInfo(ctx context.Context, agent *adk.ChatModelAgent, input *O
 					slog.Info(msg.Content)
 					result += msg.Content
 				}
+				lastMessage = msg
 			}
 		}
 	}
 
 	slog.Info("[OutlineExtractor] 大纲信息提取完成")
 
-	// 解析提取的信息
-	output, err := parseExtractedInfo(result)
-	if err != nil {
-		return nil, fmt.Errorf("解析提取信息失败: %w", err)
+	// 使用 JSON 解析器解析输出
+	if lastMessage == nil {
+		lastMessage = &schema.Message{
+			Content: result,
+		}
+	} else {
+		// 确保 lastMessage 包含完整内容
+		lastMessage.Content = result
 	}
 
-	return output, nil
-}
+	output, err := parser.Parse(ctx, lastMessage)
+	if err != nil {
+		return nil, fmt.Errorf("解析 JSON 输出失败: %w\n原始输出: %s", err, result)
+	}
 
-// parseExtractedInfo 解析 AI 提取的信息
-func parseExtractedInfo(content string) (*OutlineExtractorOutput, error) {
-	output := &OutlineExtractorOutput{}
-
-	// 使用简单的标记解析
-	// 期望格式：
-	// 【小说标题】xxx
-	// 【小说简介】xxx
-	// 【完整大纲】xxx
-	// 【世界观设定】xxx
-	// 【修行体系】xxx
-
-	output.NovelTitle = extractSection(content, "【小说标题】", "【")
-	output.Synopsis = extractSection(content, "【小说简介】", "【")
-	output.Outline = extractSection(content, "【完整大纲】", "【")
-	output.Worldview = extractSection(content, "【世界观设定】", "【")
-	output.CultivationSystem = extractSection(content, "【修行体系】", "【")
-
-	// 验证必填字段
+	// 验证必填字段（提供默认值）
 	if output.NovelTitle == "" {
 		output.NovelTitle = "未命名小说"
 	}
@@ -178,57 +175,5 @@ func parseExtractedInfo(content string) (*OutlineExtractorOutput, error) {
 		output.CultivationSystem = "暂无详细修行体系设定"
 	}
 
-	return output, nil
-}
-
-// extractSection 从内容中提取指定标记之间的文本
-func extractSection(content, startMarker, endMarker string) string {
-	startIdx := findIndex(content, startMarker)
-	if startIdx == -1 {
-		return ""
-	}
-
-	// 跳过起始标记
-	startIdx += len(startMarker)
-
-	// 查找下一个标记
-	endIdx := findIndex(content[startIdx:], endMarker)
-	if endIdx == -1 {
-		// 如果没有找到结束标记，提取到字符串末尾
-		return trimSpace(content[startIdx:])
-	}
-
-	return trimSpace(content[startIdx : startIdx+endIdx])
-}
-
-// findIndex 查找子串的位置（不区分大小写）
-func findIndex(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
-}
-
-// trimSpace 去除字符串首尾空白字符
-func trimSpace(s string) string {
-	// 去除前导空白
-	start := 0
-	for start < len(s) && isSpace(s[start]) {
-		start++
-	}
-
-	// 去除尾随空白
-	end := len(s)
-	for end > start && isSpace(s[end-1]) {
-		end--
-	}
-
-	return s[start:end]
-}
-
-// isSpace 判断字符是否为空白字符
-func isSpace(c byte) bool {
-	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
+	return &output, nil
 }

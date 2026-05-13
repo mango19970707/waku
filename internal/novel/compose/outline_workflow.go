@@ -54,11 +54,11 @@ type OutlineWorkflowInput struct {
 
 // OutlineExtractorOutput 大纲提取器的输出结构
 type OutlineExtractorOutput struct {
-	NovelTitle        string
-	Synopsis          string
-	Outline           string
-	Worldview         string
-	CultivationSystem string
+	NovelTitle        string `json:"novel_title"`
+	Synopsis          string `json:"synopsis"`
+	Outline           string `json:"outline"`
+	Worldview         string `json:"worldview"`
+	CultivationSystem string `json:"cultivation_system"`
 }
 
 // AgentExecutor 定义 Agent 执行接口，用于解耦
