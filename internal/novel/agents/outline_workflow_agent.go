@@ -563,9 +563,9 @@ func routeAfterSave(ctx context.Context, state *OutlineWorkflowState) (string, e
 //  5. 保存：将提取的信息保存到数据库（失败重试3次）
 //
 // 特性：
-//  - 每个步骤的输出保存到 data/content/{小说名称}/abstract/{阶段}.md
-//  - 支持断点续传：如果文件已存在，直接加载而不重新生成
-//  - 工具调用失败自动重试3次
+//   - 每个步骤的输出保存到 data/content/{小说名称}/abstract/{阶段}.md
+//   - 支持断点续传：如果文件已存在，直接加载而不重新生成
+//   - 工具调用失败自动重试3次
 func BuildOutlineWorkflowGraph(ctx context.Context, chatModel einoModel.BaseChatModel, db *gorm.DB, repo tools.Repository) (compose.Runnable[*OutlineWorkflowInput, *OutlineWorkflowState], error) {
 	graph := compose.NewGraph[*OutlineWorkflowInput, *OutlineWorkflowState]()
 

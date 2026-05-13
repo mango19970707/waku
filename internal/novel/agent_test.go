@@ -33,6 +33,37 @@ func init() {
 	}
 }
 
+func TestOutlineWorkflowGraph_Success(t *testing.T) {
+	ctx := context.Background()
+
+	// 创建测试数据库
+	db := setupTestDBForTools(t)
+	repo := repository.NewRepository(db)
+
+	// 构建 Graph
+	graph, err := agents.BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
+	if err != nil {
+		t.Fatalf("构建 Graph 失败: %v", err)
+	}
+
+	t.Log("=== 测试场景：完整的成功流程 ===")
+
+	// 准备输入
+	input := &agents.OutlineWorkflowInput{
+		NovelName:       "测试小说",
+		Genre:           "玄幻",
+		OriginalOutline: "一个少年的修仙之路",
+	}
+
+	// 执行工作流
+	_, err = agents.ExecuteOutlineWorkflow(ctx, graph, input)
+	if err != nil {
+		t.Fatalf("执行工作流失败: %v", err)
+	}
+
+	t.Log("✓ 完整流程测试通过")
+}
+
 func TestGenerateOutlineWithWorkflow(t *testing.T) {
 	db := setupTestDBForTools(t)
 	repo := repository.NewRepository(db)
