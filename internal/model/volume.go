@@ -8,20 +8,29 @@ import (
 
 // Volume 表示小说的一个分卷
 type Volume struct {
-	// ID 分卷唯一标识
-	ID string `gorm:"primaryKey;type:varchar(36)" json:"id"`
+	// ID 分卷唯一标识（自增ID）
+	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
 
-	// NovelID 所属小说 ID
-	NovelID string `gorm:"type:varchar(36);not null;index" json:"novel_id"`
+	// NovelID 所属小说ID（外键）
+	NovelID uint `gorm:"not null;index" json:"novel_id"`
 
-	// Title 分卷标题
+	// VolumeNumber 卷号（第1卷、第2卷...）
+	VolumeNumber int `gorm:"not null" json:"volume_number"`
+
+	// Title 卷标题
 	Title string `gorm:"type:varchar(200);not null" json:"title"`
 
-	// Order 分卷序号（从 1 开始）
-	Order int `gorm:"not null" json:"order"`
-
-	// Synopsis 分卷简介
+	// Synopsis 卷简介
 	Synopsis string `gorm:"type:text" json:"synopsis"`
+
+	// Theme 卷主题
+	Theme string `gorm:"type:text" json:"theme"`
+
+	// Outline 卷大纲
+	Outline string `gorm:"type:text" json:"outline"`
+
+	// Status 卷状态（draft-草稿、writing-连载中、completed-已完结）
+	Status string `gorm:"type:varchar(20);default:'draft'" json:"status"`
 
 	// CreatedAt 创建时间
 	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
@@ -31,4 +40,8 @@ type Volume struct {
 
 	// DeletedAt 软删除时间
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+
+	// 关联关系
+	Novel    Novel     `gorm:"foreignKey:NovelID" json:"-"`
+	Chapters []Chapter `gorm:"foreignKey:VolumeID" json:"chapters,omitempty"`
 }
