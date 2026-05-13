@@ -8,8 +8,8 @@ import (
 
 // Novel 表示一部小说
 type Novel struct {
-	// ID 小说唯一标识
-	ID string `gorm:"primaryKey;type:varchar(36)" json:"id"`
+	// ID 小说唯一标识（自增ID）
+	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
 
 	// Title 小说标题
 	Title string `gorm:"type:varchar(200);not null" json:"title"`
@@ -22,6 +22,9 @@ type Novel struct {
 
 	// Synopsis 小说简介
 	Synopsis string `gorm:"type:text" json:"synopsis"`
+
+	// Outline 小说大纲（完整的大纲内容）
+	Outline string `gorm:"type:text" json:"outline"`
 
 	// Worldview 世界观设定（包括世界背景、时代设定、社会结构等）
 	Worldview string `gorm:"type:text" json:"worldview"`

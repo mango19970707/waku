@@ -42,7 +42,7 @@ type SaveOutlineToolOutput struct {
 	// Success 是否成功
 	Success bool `json:"success"`
 	// NovelID 小说ID
-	NovelID string `json:"novel_id"`
+	NovelID uint `json:"novel_id"`
 	// Message 提示信息
 	Message string `json:"message"`
 }
@@ -129,7 +129,7 @@ func (t *SaveOutlineTool) Invoke(ctx context.Context, input SaveOutlineToolInput
 		}, nil
 	}
 
-	message := fmt.Sprintf("小说《%s》已成功保存到数据库，ID: %s", novel.Title, novel.ID)
+	message := fmt.Sprintf("小说《%s》已成功保存到数据库，ID: %d", novel.Title, novel.ID)
 	return SaveOutlineToolOutput{
 		Success: true,
 		NovelID: novel.ID,

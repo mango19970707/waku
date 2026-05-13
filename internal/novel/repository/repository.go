@@ -5,7 +5,6 @@ import (
 	"time"
 	"waku/internal/model"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -15,7 +14,7 @@ type Repository interface {
 	Create(novel *model.Novel) error
 
 	// GetByID 根据 ID 获取小说
-	GetByID(id string) (*model.Novel, error)
+	GetByID(id uint) (*model.Novel, error)
 
 	// GetAll 获取所有小说（支持分页）
 	GetAll(offset, limit int) ([]*model.Novel, error)
@@ -30,13 +29,13 @@ type Repository interface {
 	Update(novel *model.Novel) error
 
 	// UpdateStatus 更新小说状态
-	UpdateStatus(id, status string) error
+	UpdateStatus(id uint, status string) error
 
 	// Delete 删除小说（软删除）
-	Delete(id string) error
+	Delete(id uint) error
 
 	// HardDelete 永久删除小说
-	HardDelete(id string) error
+	HardDelete(id uint) error
 
 	// Count 统计小说总数
 	Count() (int64, error)
@@ -72,10 +71,7 @@ func NewRepository(db *gorm.DB) Repository {
 // 返回值：
 //   - error: 创建失败时返回错误
 func (r *repository) Create(novel *model.Novel) error {
-	// 如果没有提供 ID，自动生成 UUID
-	if novel.ID == "" {
-		novel.ID = uuid.New().String()
-	}
+	// ID 由数据库自动生成（自增主键）
 
 	// 设置创建时间和更新时间
 	now := time.Now()
@@ -103,12 +99,12 @@ func (r *repository) Create(novel *model.Novel) error {
 // 返回值：
 //   - *model.Novel: 小说对象
 //   - error: 获取失败时返回错误
-func (r *repository) GetByID(id string) (*model.Novel, error) {
+func (r *repository) GetByID(id uint) (*model.Novel, error) {
 	var novel model.Novel
 
 	if err := r.db.Where("id = ?", id).First(&novel).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return nil, fmt.Errorf("小说不存在: %s", id)
+			return nil, fmt.Errorf("小说不存在: %d", id)
 		}
 		return nil, fmt.Errorf("获取小说失败: %w", err)
 	}
@@ -213,7 +209,7 @@ func (r *repository) GetByStatus(status string, offset, limit int) ([]*model.Nov
 // 返回值：
 //   - error: 更新失败时返回错误
 func (r *repository) Update(novel *model.Novel) error {
-	if novel.ID == "" {
+	if novel.ID == 0 {
 		return fmt.Errorf("小说 ID 不能为空")
 	}
 
@@ -227,7 +223,7 @@ func (r *repository) Update(novel *model.Novel) error {
 	}
 
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("小说不存在: %s", novel.ID)
+		return fmt.Errorf("小说不存在: %d", novel.ID)
 	}
 
 	return nil
@@ -241,7 +237,7 @@ func (r *repository) Update(novel *model.Novel) error {
 //
 // 返回值：
 //   - error: 更新失败时返回错误
-func (r *repository) UpdateStatus(id, status string) error {
+func (r *repository) UpdateStatus(id uint, status string) error {
 	result := r.db.Model(&model.Novel{}).
 		Where("id = ?", id).
 		Updates(map[string]interface{}{
@@ -254,7 +250,7 @@ func (r *repository) UpdateStatus(id, status string) error {
 	}
 
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("小说不存在: %s", id)
+		return fmt.Errorf("小说不存在: %d", id)
 	}
 
 	return nil
@@ -267,7 +263,7 @@ func (r *repository) UpdateStatus(id, status string) error {
 //
 // 返回值：
 //   - error: 删除失败时返回错误
-func (r *repository) Delete(id string) error {
+func (r *repository) Delete(id uint) error {
 	result := r.db.Where("id = ?", id).Delete(&model.Novel{})
 
 	if result.Error != nil {
@@ -275,7 +271,7 @@ func (r *repository) Delete(id string) error {
 	}
 
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("小说不存在: %s", id)
+		return fmt.Errorf("小说不存在: %d", id)
 	}
 
 	return nil
@@ -288,7 +284,7 @@ func (r *repository) Delete(id string) error {
 //
 // 返回值：
 //   - error: 删除失败时返回错误
-func (r *repository) HardDelete(id string) error {
+func (r *repository) HardDelete(id uint) error {
 	result := r.db.Unscoped().Where("id = ?", id).Delete(&model.Novel{})
 
 	if result.Error != nil {
@@ -296,7 +292,7 @@ func (r *repository) HardDelete(id string) error {
 	}
 
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("小说不存在: %s", id)
+		return fmt.Errorf("小说不存在: %d", id)
 	}
 
 	return nil

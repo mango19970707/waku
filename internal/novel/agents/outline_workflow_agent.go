@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"waku/internal/model"
 	"waku/internal/novel/tools"
 	"waku/internal/utils"
@@ -20,6 +19,8 @@ import (
 type OutlineWorkflowState struct {
 	// CurrentNode 当前节点名称
 	CurrentNode string
+	// NovelID 小说ID（用于更新已有小说，非必填）
+	NovelID uint
 	// NovelName 小说名称（用于文件保存路径）
 	NovelName string
 	// Genre 小说类型
@@ -32,8 +33,10 @@ type OutlineWorkflowState struct {
 	ExpandedOutline string
 	// PolishedOutline 润色后的大纲
 	PolishedOutline string
-	// NovelID 保存到数据库后的小说ID
-	NovelID string
+	// ExtractedInfo 提取的结构化信息
+	ExtractedInfo *OutlineExtractorOutput
+	// SavedNovelID 保存到数据库后的小说ID
+	SavedNovelID uint
 	// ErrorMsg 错误信息
 	ErrorMsg string
 	// RetryCount 当前节点的重试次数
@@ -44,7 +47,9 @@ type OutlineWorkflowState struct {
 
 // OutlineWorkflowInput 大纲工作流输入
 type OutlineWorkflowInput struct {
-	// NovelName 小说名称
+	// NovelID 小说ID（用于更新已有小说，非必填）
+	NovelID uint
+	// NovelName 小说名称（非必填，第一次生成时可为空）
 	NovelName string
 	// Genre 小说类型
 	Genre string
@@ -55,9 +60,17 @@ type OutlineWorkflowInput struct {
 // ==================== 文件保存辅助函数 ====================
 
 // saveToFile 保存内容到文件
-func saveToFile(novelName, stage, content string) error {
-	// 构建文件路径：data/content/{小说名称}/abstract/{阶段}.md
-	dir := filepath.Join("data", "content", novelName, "abstract")
+func saveToFile(novelID uint, novelName, stage, content string) error {
+	// 构建文件路径：data/content/{小说ID-名称}/abstract/{阶段}.md
+	var dirName string
+	if novelID > 0 {
+		dirName = fmt.Sprintf("%d-%s", novelID, novelName)
+	} else {
+		// 如果没有ID，使用临时名称
+		dirName = fmt.Sprintf("temp-%s", novelName)
+	}
+
+	dir := filepath.Join("data", "content", dirName, "abstract")
 
 	// 创建目录（如果不存在）
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -76,8 +89,15 @@ func saveToFile(novelName, stage, content string) error {
 }
 
 // loadFromFile 从文件加载内容（用于断点续传）
-func loadFromFile(novelName, stage string) (string, error) {
-	filePath := filepath.Join("data", "content", novelName, "abstract", fmt.Sprintf("%s.md", stage))
+func loadFromFile(novelID uint, novelName, stage string) (string, error) {
+	var dirName string
+	if novelID > 0 {
+		dirName = fmt.Sprintf("%d-%s", novelID, novelName)
+	} else {
+		dirName = fmt.Sprintf("temp-%s", novelName)
+	}
+
+	filePath := filepath.Join("data", "content", dirName, "abstract", fmt.Sprintf("%s.md", stage))
 
 	content, err := os.ReadFile(filePath)
 	if err != nil {
@@ -98,6 +118,7 @@ func initNode(ctx context.Context, input *OutlineWorkflowInput) (*OutlineWorkflo
 
 	state := &OutlineWorkflowState{
 		CurrentNode:     "init",
+		NovelID:         input.NovelID,
 		NovelName:       input.NovelName,
 		Genre:           input.Genre,
 		OriginalOutline: input.OriginalOutline,
@@ -115,7 +136,7 @@ func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(c
 
 		// 尝试从文件加载（断点续传）
 		if state.GeneratedOutline == "" {
-			existingContent, err := loadFromFile(state.NovelName, "生成")
+			existingContent, err := loadFromFile(state.NovelID, state.NovelName, "生成")
 			if err != nil {
 				state.ErrorMsg = fmt.Sprintf("加载已有内容失败: %v", err)
 				state.CurrentNode = "generate_failed"
@@ -154,7 +175,7 @@ func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(c
 		state.GeneratedOutline = result
 
 		// 保存到文件
-		if err := saveToFile(state.NovelName, "生成", result); err != nil {
+		if err := saveToFile(state.NovelID, state.NovelName, "生成", result); err != nil {
 			state.ErrorMsg = fmt.Sprintf("保存文件失败: %v", err)
 			state.CurrentNode = "generate_failed"
 			return state, nil
@@ -174,7 +195,7 @@ func expandNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 
 		// 尝试从文件加载（断点续传）
 		if state.ExpandedOutline == "" {
-			existingContent, err := loadFromFile(state.NovelName, "扩写")
+			existingContent, err := loadFromFile(state.NovelID, state.NovelName, "扩写")
 			if err != nil {
 				state.ErrorMsg = fmt.Sprintf("加载已有内容失败: %v", err)
 				state.CurrentNode = "expand_failed"
@@ -213,7 +234,7 @@ func expandNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 		state.ExpandedOutline = result
 
 		// 保存到文件
-		if err := saveToFile(state.NovelName, "扩写", result); err != nil {
+		if err := saveToFile(state.NovelID, state.NovelName, "扩写", result); err != nil {
 			state.ErrorMsg = fmt.Sprintf("保存文件失败: %v", err)
 			state.CurrentNode = "expand_failed"
 			return state, nil
@@ -233,7 +254,7 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 
 		// 尝试从文件加载（断点续传）
 		if state.PolishedOutline == "" {
-			existingContent, err := loadFromFile(state.NovelName, "润色")
+			existingContent, err := loadFromFile(state.NovelID, state.NovelName, "润色")
 			if err != nil {
 				state.ErrorMsg = fmt.Sprintf("加载已有内容失败: %v", err)
 				state.CurrentNode = "polish_failed"
@@ -247,7 +268,7 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			}
 		}
 
-		// 创建润色 Agent（不带数据库工具，因为我们在单独的节点中保存）
+		// 创建润色 Agent（不带数据库工具）
 		agent, err := NewOutlinePolisherAgent(ctx, chatModel, nil, nil)
 		if err != nil {
 			state.ErrorMsg = fmt.Sprintf("创建润色 Agent 失败: %v", err)
@@ -272,7 +293,7 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 		state.PolishedOutline = result
 
 		// 保存到文件
-		if err := saveToFile(state.NovelName, "润色", result); err != nil {
+		if err := saveToFile(state.NovelID, state.NovelName, "润色", result); err != nil {
 			state.ErrorMsg = fmt.Sprintf("保存文件失败: %v", err)
 			state.CurrentNode = "polish_failed"
 			return state, nil
@@ -285,79 +306,145 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 	}
 }
 
+// extractNode 提取大纲信息节点
+func extractNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+	return func(ctx context.Context, state *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+		fmt.Printf("\n🤖 [提取] 开始提取大纲信息...\n")
+
+		// 如果已经提取过，跳过
+		if state.ExtractedInfo != nil {
+			fmt.Printf("  ✓ 已提取信息\n")
+			state.CurrentNode = "extract_success"
+			return state, nil
+		}
+
+		// 创建提取 Agent
+		agent, err := NewOutlineExtractorAgent(ctx, chatModel)
+		if err != nil {
+			state.ErrorMsg = fmt.Sprintf("创建提取 Agent 失败: %v", err)
+			state.CurrentNode = "extract_failed"
+			return state, nil
+		}
+
+		// 执行提取
+		input := &OutlineExtractorInput{
+			Outline:   state.PolishedOutline,
+			Genre:     state.Genre,
+			NovelName: state.NovelName,
+		}
+
+		result, err := ExtractOutlineInfo(ctx, agent, input)
+		if err != nil {
+			state.ErrorMsg = fmt.Sprintf("提取大纲信息失败: %v", err)
+			state.CurrentNode = "extract_failed"
+			return state, nil
+		}
+
+		// 保存结果
+		state.ExtractedInfo = result
+
+		// 如果工作流输入中没有提供小说名称，使用提取的标题作为名称
+		if state.NovelName == "" && result.NovelTitle != "" {
+			state.NovelName = result.NovelTitle
+		}
+
+		fmt.Printf("  ✓ 信息提取完成\n")
+		fmt.Printf("    - 标题: %s\n", result.NovelTitle)
+		fmt.Printf("    - 简介: %s\n", result.Synopsis[:min(50, len(result.Synopsis))])
+		state.CurrentNode = "extract_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+// min 返回两个整数中的较小值
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // saveToDBNode 保存到数据库节点
 func saveToDBNode(db *gorm.DB, repo tools.Repository) func(context.Context, *OutlineWorkflowState) (*OutlineWorkflowState, error) {
 	return func(ctx context.Context, state *OutlineWorkflowState) (*OutlineWorkflowState, error) {
 		fmt.Printf("\n🤖 [保存] 开始保存到数据库...\n")
 
 		// 如果已经保存过，跳过
-		if state.NovelID != "" {
-			fmt.Printf("  ✓ 已保存，小说ID: %s\n", state.NovelID)
+		if state.SavedNovelID > 0 {
+			fmt.Printf("  ✓ 已保存，小说ID: %d\n", state.SavedNovelID)
 			state.CurrentNode = "save_success"
 			return state, nil
 		}
 
-		// 从大纲中提取世界观和修行体系
-		worldview := extractWorldview(state.PolishedOutline)
-		cultivationSystem := extractCultivationSystem(state.PolishedOutline)
-
-		// 创建小说对象
-		novel := &model.Novel{
-			Title:             state.NovelName,
-			Author:            "AI创作",
-			Genre:             state.Genre,
-			Synopsis:          fmt.Sprintf("这是一部%s类型的小说", state.Genre),
-			Worldview:         worldview,
-			CultivationSystem: cultivationSystem,
-			Status:            "draft",
-		}
-
-		// 保存到数据库
-		if err := repo.Create(novel); err != nil {
-			state.ErrorMsg = fmt.Sprintf("保存到数据库失败: %v", err)
+		// 检查是否已提取信息
+		if state.ExtractedInfo == nil {
+			state.ErrorMsg = "未提取大纲信息，无法保存到数据库"
 			state.CurrentNode = "save_failed"
 			return state, nil
 		}
 
-		// 保存结果
-		state.NovelID = novel.ID
+		// 判断是新增还是更新
+		if state.NovelID > 0 {
+			// 更新已有小说
+			fmt.Printf("  → 更新已有小说 (ID: %d)\n", state.NovelID)
 
-		fmt.Printf("  ✓ 保存成功，小说ID: %s\n", state.NovelID)
+			// 查询已有小说
+			var existingNovel model.Novel
+			if err := db.First(&existingNovel, state.NovelID).Error; err != nil {
+				state.ErrorMsg = fmt.Sprintf("查询小说失败: %v", err)
+				state.CurrentNode = "save_failed"
+				return state, nil
+			}
+
+			// 更新字段
+			existingNovel.Title = state.ExtractedInfo.NovelTitle
+			existingNovel.Genre = state.Genre
+			existingNovel.Synopsis = state.ExtractedInfo.Synopsis
+			existingNovel.Outline = state.ExtractedInfo.Outline
+			existingNovel.Worldview = state.ExtractedInfo.Worldview
+			existingNovel.CultivationSystem = state.ExtractedInfo.CultivationSystem
+
+			// 保存更新
+			if err := db.Save(&existingNovel).Error; err != nil {
+				state.ErrorMsg = fmt.Sprintf("更新小说失败: %v", err)
+				state.CurrentNode = "save_failed"
+				return state, nil
+			}
+
+			state.SavedNovelID = existingNovel.ID
+			fmt.Printf("  ✓ 更新成功，小说ID: %d\n", state.SavedNovelID)
+		} else {
+			// 新增小说
+			fmt.Printf("  → 创建新小说\n")
+
+			novel := &model.Novel{
+				Title:             state.ExtractedInfo.NovelTitle,
+				Author:            "AI创作",
+				Genre:             state.Genre,
+				Synopsis:          state.ExtractedInfo.Synopsis,
+				Outline:           state.ExtractedInfo.Outline,
+				Worldview:         state.ExtractedInfo.Worldview,
+				CultivationSystem: state.ExtractedInfo.CultivationSystem,
+				Status:            "draft",
+			}
+
+			// 保存到数据库
+			if err := repo.Create(novel); err != nil {
+				state.ErrorMsg = fmt.Sprintf("保存到数据库失败: %v", err)
+				state.CurrentNode = "save_failed"
+				return state, nil
+			}
+
+			state.SavedNovelID = novel.ID
+			state.NovelID = novel.ID // 更新状态中的 NovelID
+			fmt.Printf("  ✓ 保存成功，小说ID: %d\n", state.SavedNovelID)
+		}
+
 		state.CurrentNode = "save_success"
 		state.RetryCount = 0
 		return state, nil
 	}
-}
-
-// extractWorldview 从大纲中提取世界观内容（简化版本）
-func extractWorldview(outline string) string {
-	// 简化实现：查找包含"世界观"的段落
-	if idx := strings.Index(outline, "世界观"); idx != -1 {
-		// 提取该段落
-		end := strings.Index(outline[idx:], "\n\n")
-		if end == -1 {
-			end = len(outline) - idx
-		}
-		return strings.TrimSpace(outline[idx : idx+end])
-	}
-	return "暂无详细世界观设定"
-}
-
-// extractCultivationSystem 从大纲中提取修行体系内容（简化版本）
-func extractCultivationSystem(outline string) string {
-	// 简化实现：查找包含"修行体系"或"修炼体系"的段落
-	keywords := []string{"修行体系", "修炼体系", "境界"}
-	for _, keyword := range keywords {
-		if idx := strings.Index(outline, keyword); idx != -1 {
-			// 提取该段落
-			end := strings.Index(outline[idx:], "\n\n")
-			if end == -1 {
-				end = len(outline) - idx
-			}
-			return strings.TrimSpace(outline[idx : idx+end])
-		}
-	}
-	return "暂无详细修行体系设定"
 }
 
 // ==================== 路由函数 ====================
@@ -401,7 +488,7 @@ func routeAfterExpand(ctx context.Context, state *OutlineWorkflowState) (string,
 // routeAfterPolish 润色后的路由
 func routeAfterPolish(ctx context.Context, state *OutlineWorkflowState) (string, error) {
 	if state.CurrentNode == "polish_success" {
-		return "saveToDB", nil
+		return "extract", nil
 	}
 
 	// 检查是否超过最大重试次数
@@ -414,6 +501,24 @@ func routeAfterPolish(ctx context.Context, state *OutlineWorkflowState) (string,
 	state.RetryCount++
 	fmt.Printf("  ⚠️  润色失败，重试 %d/%d: %s\n", state.RetryCount, state.MaxRetries, state.ErrorMsg)
 	return "polish", nil
+}
+
+// routeAfterExtract 提取后的路由
+func routeAfterExtract(ctx context.Context, state *OutlineWorkflowState) (string, error) {
+	if state.CurrentNode == "extract_success" {
+		return "saveToDB", nil
+	}
+
+	// 检查是否超过最大重试次数
+	if state.RetryCount >= state.MaxRetries {
+		fmt.Printf("  ❌ 提取失败，已达到最大重试次数 %d\n", state.MaxRetries)
+		return compose.END, fmt.Errorf("提取失败: %s", state.ErrorMsg)
+	}
+
+	// 重试
+	state.RetryCount++
+	fmt.Printf("  ⚠️  提取失败，重试 %d/%d: %s\n", state.RetryCount, state.MaxRetries, state.ErrorMsg)
+	return "extract", nil
 }
 
 // routeAfterSave 保存后的路由
@@ -438,7 +543,7 @@ func routeAfterSave(ctx context.Context, state *OutlineWorkflowState) (string, e
 
 // BuildOutlineWorkflowGraph 构建大纲工作流 Graph
 //
-// 功能：创建一个完整的大纲生成工作流，包括生成、扩写、润色、保存四个步骤
+// 功能：创建一个完整的大纲生成工作流，包括生成、扩写、润色、提取、保存五个步骤
 //
 // 参数：
 //   - ctx: 上下文
@@ -454,7 +559,8 @@ func routeAfterSave(ctx context.Context, state *OutlineWorkflowState) (string, e
 //  1. 生成：将原始创意扩展为完整大纲（失败重试3次）
 //  2. 扩写：将大纲扩展为详细的故事框架（失败重试3次）
 //  3. 润色：对大纲进行深度优化和提升（失败重试3次）
-//  4. 保存：将大纲保存到数据库（失败重试3次）
+//  4. 提取：从大纲中提取结构化信息（失败重试3次）
+//  5. 保存：将提取的信息保存到数据库（失败重试3次）
 //
 // 特性：
 //  - 每个步骤的输出保存到 data/content/{小说名称}/abstract/{阶段}.md
@@ -468,6 +574,7 @@ func BuildOutlineWorkflowGraph(ctx context.Context, chatModel einoModel.BaseChat
 	graph.AddLambdaNode("generate", compose.InvokableLambda(generateNode(ctx, chatModel)))
 	graph.AddLambdaNode("expand", compose.InvokableLambda(expandNode(ctx, chatModel)))
 	graph.AddLambdaNode("polish", compose.InvokableLambda(polishNode(ctx, chatModel)))
+	graph.AddLambdaNode("extract", compose.InvokableLambda(extractNode(ctx, chatModel)))
 	graph.AddLambdaNode("saveToDB", compose.InvokableLambda(saveToDBNode(db, repo)))
 
 	// 添加边
@@ -494,7 +601,15 @@ func BuildOutlineWorkflowGraph(ctx context.Context, chatModel einoModel.BaseChat
 	graph.AddBranch("polish", compose.NewGraphBranch(
 		routeAfterPolish,
 		map[string]bool{
-			"polish":   true,
+			"polish":  true,
+			"extract": true,
+		},
+	))
+
+	graph.AddBranch("extract", compose.NewGraphBranch(
+		routeAfterExtract,
+		map[string]bool{
+			"extract":  true,
 			"saveToDB": true,
 		},
 	))
@@ -502,7 +617,7 @@ func BuildOutlineWorkflowGraph(ctx context.Context, chatModel einoModel.BaseChat
 	graph.AddBranch("saveToDB", compose.NewGraphBranch(
 		routeAfterSave,
 		map[string]bool{
-			"saveToDB": true,
+			"saveToDB":  true,
 			compose.END: true,
 		},
 	))
@@ -549,8 +664,8 @@ func ExecuteOutlineWorkflow(ctx context.Context, graph compose.Runnable[*Outline
 	fmt.Printf("✅ 工作流执行完成\n")
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 	fmt.Printf("最终状态: %s\n", result.CurrentNode)
-	if result.NovelID != "" {
-		fmt.Printf("小说ID: %s\n", result.NovelID)
+	if result.NovelID != 0 {
+		fmt.Printf("小说ID: %d\n", result.NovelID)
 	}
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
