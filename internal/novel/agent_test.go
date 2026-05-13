@@ -50,9 +50,8 @@ func TestOutlineGenerateWorkflowGraph(t *testing.T) {
 
 	// 准备输入
 	input := &compose.OutlineWorkflowInput{
-		NovelName:       "测试小说",
 		Genre:           "玄幻",
-		OriginalOutline: "一个少年的修仙之路",
+		OriginalOutline: "完全模仿斗破苍穹的套路，修行体系啥都一样",
 	}
 
 	// 执行工作流
