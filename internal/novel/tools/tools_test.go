@@ -94,11 +94,13 @@ func TestSaveOutlineTool(t *testing.T) {
 
 	// 构建工具输入参数
 	input := SaveOutlineToolInput{
-		Title:    "斗破苍穹",
-		Author:   "天蚕土豆",
-		Genre:    "玄幻",
-		Synopsis: "三十年河东，三十年河西，莫欺少年穷！",
-		Outline:  outline,
+		Title:             "斗破苍穹",
+		Author:            "天蚕土豆",
+		Genre:             "玄幻",
+		Synopsis:          "三十年河东，三十年河西，莫欺少年穷！",
+		Outline:           outline,
+		Worldview:         "斗气大陆，修炼斗气的世界，包含西北域、中州、东域等区域",
+		CultivationSystem: "斗之气、斗者、斗师、大斗师、斗灵、斗王、斗皇、斗宗、斗尊、斗圣、斗帝",
 	}
 
 	// 将输入转换为 JSON
@@ -130,8 +132,8 @@ func TestSaveOutlineTool(t *testing.T) {
 	assert.Equal(t, "斗破苍穹", novel.Title)
 	assert.Equal(t, "天蚕土豆", novel.Author)
 	assert.Equal(t, "玄幻", novel.Genre)
-	assert.Contains(t, novel.Worldview, "世界构成")
-	assert.Contains(t, novel.CultivationSystem, "境界划分")
+	assert.Contains(t, novel.Worldview, "斗气大陆")
+	assert.Contains(t, novel.CultivationSystem, "斗帝")
 }
 
 // TestSaveOutlineToolValidation 测试工具参数验证
@@ -152,10 +154,12 @@ func TestSaveOutlineToolValidation(t *testing.T) {
 		{
 			name: "缺少标题",
 			input: SaveOutlineToolInput{
-				Author:   "作者",
-				Genre:    "玄幻",
-				Synopsis: "简介",
-				Outline:  "大纲",
+				Author:            "作者",
+				Genre:             "玄幻",
+				Synopsis:          "简介",
+				Outline:           "大纲",
+				Worldview:         "世界观",
+				CultivationSystem: "修行体系",
 			},
 			expectError: false,
 			errorMsg:    "小说标题不能为空",
@@ -163,10 +167,12 @@ func TestSaveOutlineToolValidation(t *testing.T) {
 		{
 			name: "缺少作者",
 			input: SaveOutlineToolInput{
-				Title:    "标题",
-				Genre:    "玄幻",
-				Synopsis: "简介",
-				Outline:  "大纲",
+				Title:             "标题",
+				Genre:             "玄幻",
+				Synopsis:          "简介",
+				Outline:           "大纲",
+				Worldview:         "世界观",
+				CultivationSystem: "修行体系",
 			},
 			expectError: false,
 			errorMsg:    "作者名称不能为空",
@@ -174,10 +180,12 @@ func TestSaveOutlineToolValidation(t *testing.T) {
 		{
 			name: "缺少类型",
 			input: SaveOutlineToolInput{
-				Title:    "标题",
-				Author:   "作者",
-				Synopsis: "简介",
-				Outline:  "大纲",
+				Title:             "标题",
+				Author:            "作者",
+				Synopsis:          "简介",
+				Outline:           "大纲",
+				Worldview:         "世界观",
+				CultivationSystem: "修行体系",
 			},
 			expectError: false,
 			errorMsg:    "小说类型不能为空",
@@ -185,10 +193,12 @@ func TestSaveOutlineToolValidation(t *testing.T) {
 		{
 			name: "缺少简介",
 			input: SaveOutlineToolInput{
-				Title:   "标题",
-				Author:  "作者",
-				Genre:   "玄幻",
-				Outline: "大纲",
+				Title:             "标题",
+				Author:            "作者",
+				Genre:             "玄幻",
+				Outline:           "大纲",
+				Worldview:         "世界观",
+				CultivationSystem: "修行体系",
 			},
 			expectError: false,
 			errorMsg:    "小说简介不能为空",
@@ -196,13 +206,41 @@ func TestSaveOutlineToolValidation(t *testing.T) {
 		{
 			name: "缺少大纲",
 			input: SaveOutlineToolInput{
-				Title:    "标题",
-				Author:   "作者",
-				Genre:    "玄幻",
-				Synopsis: "简介",
+				Title:             "标题",
+				Author:            "作者",
+				Genre:             "玄幻",
+				Synopsis:          "简介",
+				Worldview:         "世界观",
+				CultivationSystem: "修行体系",
 			},
 			expectError: false,
 			errorMsg:    "大纲内容不能为空",
+		},
+		{
+			name: "缺少世界观",
+			input: SaveOutlineToolInput{
+				Title:             "标题",
+				Author:            "作者",
+				Genre:             "玄幻",
+				Synopsis:          "简介",
+				Outline:           "大纲",
+				CultivationSystem: "修行体系",
+			},
+			expectError: false,
+			errorMsg:    "世界观不能为空",
+		},
+		{
+			name: "缺少修行体系",
+			input: SaveOutlineToolInput{
+				Title:     "标题",
+				Author:    "作者",
+				Genre:     "玄幻",
+				Synopsis:  "简介",
+				Outline:   "大纲",
+				Worldview: "世界观",
+			},
+			expectError: false,
+			errorMsg:    "修行体系不能为空",
 		},
 	}
 
@@ -234,14 +272,12 @@ func TestSaveOutlineToolValidation(t *testing.T) {
 
 // TestExtractWorldview 测试世界观提取
 func TestExtractWorldview(t *testing.T) {
-	// 注意：extractWorldview 是私有方法，无法直接测试
-	// 这个功能已经通过 TestSaveOutlineTool 集成测试覆盖
-	t.Skip("extractWorldview 是私有方法，已通过集成测试覆盖")
+	// 注意：世界观现在由上游节点提取，不再在 SaveOutlineTool 中处理
+	t.Skip("世界观由上游提取节点处理，SaveOutlineTool 直接接收提取好的数据")
 }
 
 // TestExtractCultivationSystem 测试修行体系提取
 func TestExtractCultivationSystem(t *testing.T) {
-	// 注意：extractCultivationSystem 是私有方法，无法直接测试
-	// 这个功能已经通过 TestSaveOutlineTool 集成测试覆盖
-	t.Skip("extractCultivationSystem 是私有方法，已通过集成测试覆盖")
+	// 注意：修行体系现在由上游节点提取，不再在 SaveOutlineTool 中处理
+	t.Skip("修行体系由上游提取节点处理，SaveOutlineTool 直接接收提取好的数据")
 }

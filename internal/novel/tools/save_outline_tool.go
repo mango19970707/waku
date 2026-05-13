@@ -3,8 +3,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"regexp"
-	"strings"
 	"waku/internal/model"
 
 	"github.com/cloudwego/eino/components/tool"
@@ -34,7 +32,11 @@ type SaveOutlineToolInput struct {
 	// Synopsis 小说简介
 	Synopsis string `json:"synopsis" jsonschema:"required" jsonschema_description:"小说简介"`
 	// Outline 完整的大纲内容
-	Outline string `json:"outline" jsonschema:"required" jsonschema_description:"完整的大纲内容（包含世界观、修行体系等）"`
+	Outline string `json:"outline" jsonschema:"required" jsonschema_description:"完整的大纲内容"`
+	// Worldview 世界观设定
+	Worldview string `json:"worldview" jsonschema:"required" jsonschema_description:"世界观设定"`
+	// CultivationSystem 修行体系
+	CultivationSystem string `json:"cultivation_system" jsonschema:"required" jsonschema_description:"修行体系"`
 }
 
 // SaveOutlineToolOutput 保存大纲工具的输出
@@ -62,7 +64,7 @@ func NewSaveOutlineTool(db *gorm.DB, repo Repository) (tool.InvokableTool, error
 	}
 
 	toolDesc := `保存小说大纲到数据库。
-该工具会从大纲内容中提取世界观和修行体系信息，并将完整的小说信息保存到数据库中。
+该工具将完整的小说信息（包括世界观和修行体系）保存到数据库中。
 
 使用场景：
 - 当大纲润色完成后，需要保存到数据库
@@ -73,7 +75,9 @@ func NewSaveOutlineTool(db *gorm.DB, repo Repository) (tool.InvokableTool, error
 - author: 作者名称（必填）
 - genre: 小说类型，如"玄幻"、"都市"、"科幻"等（必填）
 - synopsis: 小说简介，简短描述故事梗概（必填）
-- outline: 完整的大纲内容，包含世界观、修行体系、剧情等所有信息（必填）
+- outline: 完整的大纲内容（必填）
+- worldview: 世界观设定（必填）
+- cultivation_system: 修行体系（必填）
 
 返回值：
 - success: 是否保存成功
@@ -105,10 +109,12 @@ func (t *SaveOutlineTool) Invoke(ctx context.Context, input SaveOutlineToolInput
 	if input.Outline == "" {
 		return SaveOutlineToolOutput{Success: false, Message: "大纲内容不能为空"}, nil
 	}
-
-	// 从大纲中提取世界观和修行体系
-	worldview := t.extractWorldview(input.Outline)
-	cultivationSystem := t.extractCultivationSystem(input.Outline)
+	if input.Worldview == "" {
+		return SaveOutlineToolOutput{Success: false, Message: "世界观不能为空"}, nil
+	}
+	if input.CultivationSystem == "" {
+		return SaveOutlineToolOutput{Success: false, Message: "修行体系不能为空"}, nil
+	}
 
 	// 创建小说对象
 	novel := &model.Novel{
@@ -116,8 +122,8 @@ func (t *SaveOutlineTool) Invoke(ctx context.Context, input SaveOutlineToolInput
 		Author:            input.Author,
 		Genre:             input.Genre,
 		Synopsis:          input.Synopsis,
-		Worldview:         worldview,
-		CultivationSystem: cultivationSystem,
+		Worldview:         input.Worldview,
+		CultivationSystem: input.CultivationSystem,
 		Status:            "draft",
 	}
 
@@ -135,147 +141,4 @@ func (t *SaveOutlineTool) Invoke(ctx context.Context, input SaveOutlineToolInput
 		NovelID: novel.ID,
 		Message: message,
 	}, nil
-}
-
-// extractWorldview 从大纲中提取世界观内容
-func (t *SaveOutlineTool) extractWorldview(outline string) string {
-	// 尝试匹配世界观相关的章节
-	patterns := []string{
-		`(?s)##?\s*世界观\s*\n(.*?)(?:\n##|\z)`,
-		`(?s)##?\s*2\.\s*世界观\s*\n(.*?)(?:\n##|\z)`,
-		`(?s)世界观[:：]\s*\n(.*?)(?:\n##|\z)`,
-	}
-
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
-		if matches := re.FindStringSubmatch(outline); len(matches) > 1 {
-			content := strings.TrimSpace(matches[1])
-			if content != "" {
-				return content
-			}
-		}
-	}
-
-	// 如果没有找到专门的世界观章节，尝试提取相关内容
-	worldviewKeywords := []string{"世界构成", "天地规则", "种族分布", "历史脉络", "大陆", "位面", "界域"}
-	var worldviewParts []string
-
-	lines := strings.Split(outline, "\n")
-	inWorldviewSection := false
-	var currentSection strings.Builder
-
-	for _, line := range lines {
-		trimmedLine := strings.TrimSpace(line)
-
-		// 检查是否进入世界观相关章节
-		for _, keyword := range worldviewKeywords {
-			if strings.Contains(trimmedLine, keyword) {
-				inWorldviewSection = true
-				break
-			}
-		}
-
-		// 如果在世界观章节中，收集内容
-		if inWorldviewSection {
-			if strings.HasPrefix(trimmedLine, "#") && !containsAny(trimmedLine, worldviewKeywords) {
-				// 遇到新的章节标题，结束当前章节
-				if currentSection.Len() > 0 {
-					worldviewParts = append(worldviewParts, currentSection.String())
-					currentSection.Reset()
-				}
-				inWorldviewSection = false
-			} else {
-				currentSection.WriteString(line)
-				currentSection.WriteString("\n")
-			}
-		}
-	}
-
-	// 添加最后一个章节
-	if currentSection.Len() > 0 {
-		worldviewParts = append(worldviewParts, currentSection.String())
-	}
-
-	if len(worldviewParts) > 0 {
-		return strings.TrimSpace(strings.Join(worldviewParts, "\n\n"))
-	}
-
-	return "暂无详细世界观设定"
-}
-
-// extractCultivationSystem 从大纲中提取修行体系内容
-func (t *SaveOutlineTool) extractCultivationSystem(outline string) string {
-	// 尝试匹配修行体系相关的章节
-	patterns := []string{
-		`(?s)##?\s*修行体系\s*\n(.*?)(?:\n##|\z)`,
-		`(?s)##?\s*3\.\s*修行体系\s*\n(.*?)(?:\n##|\z)`,
-		`(?s)修行体系[:：]\s*\n(.*?)(?:\n##|\z)`,
-		`(?s)##?\s*修炼体系\s*\n(.*?)(?:\n##|\z)`,
-	}
-
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
-		if matches := re.FindStringSubmatch(outline); len(matches) > 1 {
-			content := strings.TrimSpace(matches[1])
-			if content != "" {
-				return content
-			}
-		}
-	}
-
-	// 如果没有找到专门的修行体系章节，尝试提取相关内容
-	cultivationKeywords := []string{"境界划分", "修炼方式", "力量体系", "特殊能力", "突破条件", "炼气", "筑基", "金丹"}
-	var cultivationParts []string
-
-	lines := strings.Split(outline, "\n")
-	inCultivationSection := false
-	var currentSection strings.Builder
-
-	for _, line := range lines {
-		trimmedLine := strings.TrimSpace(line)
-
-		// 检查是否进入修行体系相关章节
-		for _, keyword := range cultivationKeywords {
-			if strings.Contains(trimmedLine, keyword) {
-				inCultivationSection = true
-				break
-			}
-		}
-
-		// 如果在修行体系章节中，收集内容
-		if inCultivationSection {
-			if strings.HasPrefix(trimmedLine, "#") && !containsAny(trimmedLine, cultivationKeywords) {
-				// 遇到新的章节标题，结束当前章节
-				if currentSection.Len() > 0 {
-					cultivationParts = append(cultivationParts, currentSection.String())
-					currentSection.Reset()
-				}
-				inCultivationSection = false
-			} else {
-				currentSection.WriteString(line)
-				currentSection.WriteString("\n")
-			}
-		}
-	}
-
-	// 添加最后一个章节
-	if currentSection.Len() > 0 {
-		cultivationParts = append(cultivationParts, currentSection.String())
-	}
-
-	if len(cultivationParts) > 0 {
-		return strings.TrimSpace(strings.Join(cultivationParts, "\n\n"))
-	}
-
-	return "暂无详细修行体系设定"
-}
-
-// containsAny 检查字符串是否包含任意一个关键词
-func containsAny(s string, keywords []string) bool {
-	for _, keyword := range keywords {
-		if strings.Contains(s, keyword) {
-			return true
-		}
-	}
-	return false
 }
