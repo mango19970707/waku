@@ -1,0 +1,287 @@
+package compose
+
+import (
+	"context"
+	"fmt"
+
+	"waku/internal/model"
+	"waku/internal/novel/tools"
+	"waku/internal/utils"
+
+	einoModel "github.com/cloudwego/eino/components/model"
+	"gorm.io/gorm"
+)
+
+// initNode 初始化节点（将输入转换为状态）
+func initNode(ctx context.Context, input *OutlineWorkflowInput) (*OutlineWorkflowState, error) {
+	fmt.Printf("\n🤖 [初始化] 准备工作流状态...\n")
+
+	state := &OutlineWorkflowState{
+		CurrentNode:     "init",
+		NovelID:         input.NovelID,
+		NovelName:       input.NovelName,
+		Genre:           input.Genre,
+		OriginalOutline: input.OriginalOutline,
+		MaxRetries:      3, // 默认最大重试次数为3
+	}
+
+	fmt.Printf("  ✓ 状态初始化完成\n")
+	return state, nil
+}
+
+// generateNode 生成大纲节点
+func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+	return func(ctx context.Context, state *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+		fmt.Printf("\n🤖 [生成] 开始生成大纲...\n")
+
+		// 尝试从文件加载（断点续传）
+		if state.GeneratedOutline == "" {
+			existingContent, err := utils.LoadFromFile(state.NovelID, state.NovelName, "生成")
+			if err != nil {
+				state.ErrorMsg = fmt.Sprintf("加载已有内容失败: %v", err)
+				state.CurrentNode = "generate_failed"
+				return state, nil
+			}
+			if existingContent != "" {
+				fmt.Printf("  ✓ 从文件加载已有内容\n")
+				state.GeneratedOutline = existingContent
+				state.CurrentNode = "generate_success"
+				return state, nil
+			}
+		}
+
+		// 执行生成
+		result, err := agentExecutor.GenerateOutline(ctx, chatModel, state.OriginalOutline, state.Genre)
+		if err != nil {
+			state.ErrorMsg = fmt.Sprintf("生成大纲失败: %v", err)
+			state.CurrentNode = "generate_failed"
+			return state, nil
+		}
+
+		// 保存结果
+		state.GeneratedOutline = result
+
+		// 保存到文件
+		if err := utils.SaveToFile(state.NovelID, state.NovelName, "生成", result); err != nil {
+			state.ErrorMsg = fmt.Sprintf("保存文件失败: %v", err)
+			state.CurrentNode = "generate_failed"
+			return state, nil
+		}
+
+		fmt.Printf("  ✓ 大纲生成完成，已保存到文件\n")
+		state.CurrentNode = "generate_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+// expandNode 扩写大纲节点
+func expandNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+	return func(ctx context.Context, state *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+		fmt.Printf("\n🤖 [扩写] 开始扩写大纲...\n")
+
+		// 尝试从文件加载（断点续传）
+		if state.ExpandedOutline == "" {
+			existingContent, err := utils.LoadFromFile(state.NovelID, state.NovelName, "扩写")
+			if err != nil {
+				state.ErrorMsg = fmt.Sprintf("加载已有内容失败: %v", err)
+				state.CurrentNode = "expand_failed"
+				return state, nil
+			}
+			if existingContent != "" {
+				fmt.Printf("  ✓ 从文件加载已有内容\n")
+				state.ExpandedOutline = existingContent
+				state.CurrentNode = "expand_success"
+				return state, nil
+			}
+		}
+
+		// 执行扩写
+		result, err := agentExecutor.ExpandOutline(ctx, chatModel, state.GeneratedOutline, state.Genre)
+		if err != nil {
+			state.ErrorMsg = fmt.Sprintf("扩写大纲失败: %v", err)
+			state.CurrentNode = "expand_failed"
+			return state, nil
+		}
+
+		// 保存结果
+		state.ExpandedOutline = result
+
+		// 保存到文件
+		if err := utils.SaveToFile(state.NovelID, state.NovelName, "扩写", result); err != nil {
+			state.ErrorMsg = fmt.Sprintf("保存文件失败: %v", err)
+			state.CurrentNode = "expand_failed"
+			return state, nil
+		}
+
+		fmt.Printf("  ✓ 大纲扩写完成，已保存到文件\n")
+		state.CurrentNode = "expand_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+// polishNode 润色大纲节点
+func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+	return func(ctx context.Context, state *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+		fmt.Printf("\n🤖 [润色] 开始润色大纲...\n")
+
+		// 尝试从文件加载（断点续传）
+		if state.PolishedOutline == "" {
+			existingContent, err := utils.LoadFromFile(state.NovelID, state.NovelName, "润色")
+			if err != nil {
+				state.ErrorMsg = fmt.Sprintf("加载已有内容失败: %v", err)
+				state.CurrentNode = "polish_failed"
+				return state, nil
+			}
+			if existingContent != "" {
+				fmt.Printf("  ✓ 从文件加载已有内容\n")
+				state.PolishedOutline = existingContent
+				state.CurrentNode = "polish_success"
+				return state, nil
+			}
+		}
+
+		// 执行润色
+		result, err := agentExecutor.PolishOutline(ctx, chatModel, state.ExpandedOutline, state.Genre)
+		if err != nil {
+			state.ErrorMsg = fmt.Sprintf("润色大纲失败: %v", err)
+			state.CurrentNode = "polish_failed"
+			return state, nil
+		}
+
+		// 保存结果
+		state.PolishedOutline = result
+
+		// 保存到文件
+		if err := utils.SaveToFile(state.NovelID, state.NovelName, "润色", result); err != nil {
+			state.ErrorMsg = fmt.Sprintf("保存文件失败: %v", err)
+			state.CurrentNode = "polish_failed"
+			return state, nil
+		}
+
+		fmt.Printf("  ✓ 大纲润色完成，已保存到文件\n")
+		state.CurrentNode = "polish_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+// extractNode 提取大纲信息节点
+func extractNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+	return func(ctx context.Context, state *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+		fmt.Printf("\n🤖 [提取] 开始提取大纲信息...\n")
+
+		// 如果已经提取过，跳过
+		if state.ExtractedInfo != nil {
+			fmt.Printf("  ✓ 已提取信息\n")
+			state.CurrentNode = "extract_success"
+			return state, nil
+		}
+
+		// 执行提取
+		result, err := agentExecutor.ExtractOutlineInfo(ctx, chatModel, state.PolishedOutline, state.Genre, state.NovelName)
+		if err != nil {
+			state.ErrorMsg = fmt.Sprintf("提取大纲信息失败: %v", err)
+			state.CurrentNode = "extract_failed"
+			return state, nil
+		}
+
+		// 保存结果
+		state.ExtractedInfo = result
+
+		// 如果工作流输入中没有提供小说名称，使用提取的标题作为名称
+		if state.NovelName == "" && result.NovelTitle != "" {
+			state.NovelName = result.NovelTitle
+		}
+
+		fmt.Printf("  ✓ 信息提取完成\n")
+		fmt.Printf("    - 标题: %s\n", result.NovelTitle)
+		fmt.Printf("    - 简介: %s\n", result.Synopsis[:utils.Min(50, len(result.Synopsis))])
+		state.CurrentNode = "extract_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+// saveToDBNode 保存到数据库节点
+func saveToDBNode(db *gorm.DB, repo tools.Repository) func(context.Context, *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+	return func(ctx context.Context, state *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+		fmt.Printf("\n🤖 [保存] 开始保存到数据库...\n")
+
+		// 如果已经保存过，跳过
+		if state.SavedNovelID > 0 {
+			fmt.Printf("  ✓ 已保存，小说ID: %d\n", state.SavedNovelID)
+			state.CurrentNode = "save_success"
+			return state, nil
+		}
+
+		// 检查是否已提取信息
+		if state.ExtractedInfo == nil {
+			state.ErrorMsg = "未提取大纲信息，无法保存到数据库"
+			state.CurrentNode = "save_failed"
+			return state, nil
+		}
+
+		// 判断是新增还是更新
+		if state.NovelID > 0 {
+			// 更新已有小说
+			fmt.Printf("  → 更新已有小说 (ID: %d)\n", state.NovelID)
+
+			// 查询已有小说
+			var existingNovel model.Novel
+			if err := db.First(&existingNovel, state.NovelID).Error; err != nil {
+				state.ErrorMsg = fmt.Sprintf("查询小说失败: %v", err)
+				state.CurrentNode = "save_failed"
+				return state, nil
+			}
+
+			// 更新字段
+			existingNovel.Title = state.ExtractedInfo.NovelTitle
+			existingNovel.Genre = state.Genre
+			existingNovel.Synopsis = state.ExtractedInfo.Synopsis
+			existingNovel.Outline = state.ExtractedInfo.Outline
+			existingNovel.Worldview = state.ExtractedInfo.Worldview
+			existingNovel.CultivationSystem = state.ExtractedInfo.CultivationSystem
+
+			// 保存更新
+			if err := db.Save(&existingNovel).Error; err != nil {
+				state.ErrorMsg = fmt.Sprintf("更新小说失败: %v", err)
+				state.CurrentNode = "save_failed"
+				return state, nil
+			}
+
+			state.SavedNovelID = existingNovel.ID
+			fmt.Printf("  ✓ 更新成功，小说ID: %d\n", state.SavedNovelID)
+		} else {
+			// 新增小说
+			fmt.Printf("  → 创建新小说\n")
+
+			novel := &model.Novel{
+				Title:             state.ExtractedInfo.NovelTitle,
+				Author:            "AI创作",
+				Genre:             state.Genre,
+				Synopsis:          state.ExtractedInfo.Synopsis,
+				Outline:           state.ExtractedInfo.Outline,
+				Worldview:         state.ExtractedInfo.Worldview,
+				CultivationSystem: state.ExtractedInfo.CultivationSystem,
+				Status:            "draft",
+			}
+
+			// 保存到数据库
+			if err := repo.Create(novel); err != nil {
+				state.ErrorMsg = fmt.Sprintf("保存到数据库失败: %v", err)
+				state.CurrentNode = "save_failed"
+				return state, nil
+			}
+
+			state.SavedNovelID = novel.ID
+			state.NovelID = novel.ID // 更新状态中的 NovelID
+			fmt.Printf("  ✓ 保存成功，小说ID: %d\n", state.SavedNovelID)
+		}
+
+		state.CurrentNode = "save_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
