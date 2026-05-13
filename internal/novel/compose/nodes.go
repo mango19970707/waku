@@ -1,8 +1,11 @@
 package compose
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	"waku/internal/model"
 	"waku/internal/novel/tools"
@@ -204,10 +207,60 @@ func extractNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(co
 	}
 }
 
+// getUserApproval 获取用户审批决定（从终端控制台输入）
+func getUserApproval(state *OutlineWorkflowState) (bool, string) {
+	fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Printf("⚠️  需要用户确认\n")
+	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Printf("操作: 保存小说到数据库\n")
+	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+
+	if state.ExtractedInfo != nil {
+		fmt.Printf("小说标题: %s\n", state.ExtractedInfo.NovelTitle)
+		fmt.Printf("小说类型: %s\n", state.Genre)
+		fmt.Printf("简介: %s\n", state.ExtractedInfo.Synopsis)
+		fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	}
+
+	if state.NovelID > 0 {
+		fmt.Printf("⚠️  这将更新已有小说 (ID: %d)\n", state.NovelID)
+	} else {
+		fmt.Printf("📝 这将创建新小说\n")
+	}
+
+	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Printf("是否继续保存? (y/n): ")
+
+	reader := bufio.NewReader(os.Stdin)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Printf("读取输入失败: %v\n", err)
+		return false, "读取输入失败"
+	}
+
+	input = strings.TrimSpace(strings.ToLower(input))
+
+	if input == "y" || input == "yes" {
+		fmt.Printf("✓ 用户批准，继续保存\n")
+		return true, ""
+	}
+
+	fmt.Printf("✗ 用户拒绝，取消保存\n")
+	fmt.Printf("拒绝原因 (可选，直接回车跳过): ")
+	reason, _ := reader.ReadString('\n')
+	reason = strings.TrimSpace(reason)
+
+	if reason == "" {
+		reason = "用户取消操作"
+	}
+
+	return false, reason
+}
+
 // saveToDBNode 保存到数据库节点
 func saveToDBNode(db *gorm.DB, repo tools.Repository) func(context.Context, *OutlineWorkflowState) (*OutlineWorkflowState, error) {
 	return func(ctx context.Context, state *OutlineWorkflowState) (*OutlineWorkflowState, error) {
-		fmt.Printf("\n🤖 [保存] 开始保存到数据库...\n")
+		fmt.Printf("\n🤖 [保存] 准备保存到数据库...\n")
 
 		// 如果已经保存过，跳过
 		if state.SavedNovelID > 0 {
@@ -222,6 +275,32 @@ func saveToDBNode(db *gorm.DB, repo tools.Repository) func(context.Context, *Out
 			state.CurrentNode = "save_failed"
 			return state, nil
 		}
+
+		// 中断恢复逻辑：首次调用时触发中断，等待用户审批
+		if !state.WaitingForApproval {
+			// 首次调用：触发中断，等待用户审批
+			state.WaitingForApproval = true
+			state.CurrentNode = "save_waiting_approval"
+
+			// 获取用户审批
+			approved, reason := getUserApproval(state)
+			state.UserApproved = approved
+			state.DisapproveReason = reason
+
+			// 如果用户拒绝，直接返回失败
+			if !approved {
+				state.ErrorMsg = fmt.Sprintf("用户拒绝保存: %s", reason)
+				state.CurrentNode = "save_rejected"
+				state.WaitingForApproval = false
+				return state, nil
+			}
+
+			// 用户批准，继续执行保存逻辑
+			state.WaitingForApproval = false
+		}
+
+		// 执行保存操作
+		fmt.Printf("\n🤖 [保存] 开始保存到数据库...\n")
 
 		// 判断是新增还是更新
 		if state.NovelID > 0 {

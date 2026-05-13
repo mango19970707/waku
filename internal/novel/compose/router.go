@@ -85,6 +85,12 @@ func routeAfterSave(ctx context.Context, state *OutlineWorkflowState) (string, e
 		return compose.END, nil
 	}
 
+	// 如果用户拒绝保存，直接结束流程
+	if state.CurrentNode == "save_rejected" {
+		fmt.Printf("  ❌ 用户拒绝保存操作: %s\n", state.ErrorMsg)
+		return compose.END, fmt.Errorf("用户拒绝保存: %s", state.ErrorMsg)
+	}
+
 	// 检查是否超过最大重试次数
 	if state.RetryCount >= state.MaxRetries {
 		fmt.Printf("  ❌ 保存失败，已达到最大重试次数 %d\n", state.MaxRetries)

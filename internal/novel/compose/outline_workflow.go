@@ -38,6 +38,12 @@ type OutlineWorkflowState struct {
 	RetryCount int
 	// MaxRetries 最大重试次数
 	MaxRetries int
+	// WaitingForApproval 是否正在等待用户审批
+	WaitingForApproval bool
+	// UserApproved 用户是否批准（true=批准，false=拒绝）
+	UserApproved bool
+	// DisapproveReason 拒绝原因
+	DisapproveReason string
 }
 
 // OutlineWorkflowInput 大纲工作流输入
