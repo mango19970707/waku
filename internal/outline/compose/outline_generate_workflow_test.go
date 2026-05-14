@@ -145,7 +145,7 @@ func cleanupTestFiles(author, novelName string) {
 // ==================== 测试用例 ====================
 
 // TestOutlineWorkflowGraph_Success 测试完整的成功流程
-func TestOutlineWorkflowGcommit raph_Success(t *testing.T) {
+func TestOutlineWorkflowGraph_Success(t *testing.T) {
 	ctx := context.Background()
 
 	// 创建 Mock ChatModel
