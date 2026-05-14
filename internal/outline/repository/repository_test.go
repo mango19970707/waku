@@ -62,7 +62,7 @@ func TestGetByID(t *testing.T) {
 	assert.Equal(t, novel.Author, found.Author, "作者应该匹配")
 
 	// 测试获取不存在的小说
-	_, err = repo.GetByID("non-existent-id")
+	_, err = repo.GetByID(99999)
 	assert.Error(t, err, "获取不存在的小说应该返回错误")
 }
 

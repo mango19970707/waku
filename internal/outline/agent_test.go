@@ -1,4 +1,4 @@
-package novel
+package outline
 
 import (
 	"context"
@@ -7,8 +7,8 @@ import (
 
 	"waku/internal/config"
 	"waku/internal/model"
-	"waku/internal/novel/compose"
-	"waku/internal/novel/repository"
+	"waku/internal/outline/compose"
+	"waku/internal/outline/repository"
 	"waku/internal/utils"
 
 	einoModel "github.com/cloudwego/eino/components/model"
@@ -50,6 +50,8 @@ func TestOutlineGenerateWorkflowGraph(t *testing.T) {
 
 	// 准备输入
 	input := &compose.OutlineWorkflowInput{
+		NovelName:       "测试小说",
+		Author:          "测试作者",
 		Genre:           "玄幻",
 		OriginalOutline: "完全模仿斗破苍穹的套路，修行体系啥都一样",
 	}

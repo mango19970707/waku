@@ -45,7 +45,7 @@ const VolumeExtractorPrompt = `你是一位专业的信息提取专家，擅长�
 
 必须严格按照以下 JSON 格式输出：
 
-\`\`\`json
+` + "```json" + `
 {
   "volumes": [
     {
@@ -64,7 +64,7 @@ const VolumeExtractorPrompt = `你是一位专业的信息提取专家，擅长�
     }
   ]
 }
-\`\`\`
+` + "```" + `
 
 ## 注意事项
 

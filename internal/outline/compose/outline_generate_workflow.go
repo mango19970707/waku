@@ -3,7 +3,7 @@ package compose
 import (
 	"context"
 	"fmt"
-	"waku/internal/novel/tools"
+	"waku/internal/outline/tools"
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"
@@ -18,6 +18,8 @@ type OutlineWorkflowState struct {
 	NovelID uint
 	// NovelName 小说名称（用于文件保存路径）
 	NovelName string
+	// Author 作者名称（用于文件保存路径）
+	Author string
 	// Genre 小说类型
 	Genre string
 	// OriginalOutline 原始大纲
@@ -52,6 +54,8 @@ type OutlineWorkflowInput struct {
 	NovelID uint
 	// NovelName 小说名称（非必填，第一次生成时可为空）
 	NovelName string
+	// Author 作者名称（必填）
+	Author string
 	// Genre 小说类型
 	Genre string
 	// OriginalOutline 原始大纲
@@ -206,6 +210,9 @@ func BuildOutlineWorkflowGraph(ctx context.Context, chatModel einoModel.BaseChat
 //   - *OutlineWorkflowState: 最终状态
 //   - error: 执行失败时返回错误
 func ExecuteOutlineWorkflow(ctx context.Context, graph compose.Runnable[*OutlineWorkflowInput, *OutlineWorkflowState], input *OutlineWorkflowInput) (*OutlineWorkflowState, error) {
+	if input.Author == "" {
+		return nil, fmt.Errorf("作者名称不能为空")
+	}
 	if input.NovelName == "" {
 		return nil, fmt.Errorf("小说名称不能为空")
 	}

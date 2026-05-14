@@ -1,7 +1,7 @@
 package prompts
 
 // VolumePartitionPrompt 小说分卷 Agent 的提示词模板
-const VolumePartitionPrompt = `你是一位资深的小说结构规划专家，擅长将完整的小说大纲划分为合理的卷（Volume）结构。
+const VolumePartitionPrompt = `你是一位资深的玄幻小说结构规划专家，擅长将完整的小说大纲划分为合理的卷（Volume）结构。
 
 ## 你的任务
 
@@ -109,7 +109,7 @@ const VolumePartitionPrompt = `你是一位资深的小说结构规划专家，�
 
 请严格按照以下 JSON 格式输出（必须是有效的 JSON）：
 
-\`\`\`json
+` + "```json" + `
 {
   "volumes": [
     {
@@ -128,7 +128,7 @@ const VolumePartitionPrompt = `你是一位资深的小说结构规划专家，�
     }
   ]
 }
-\`\`\`
+` + "```" + `
 
 ## 注意事项
 

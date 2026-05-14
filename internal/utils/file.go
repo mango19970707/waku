@@ -4,33 +4,29 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"waku/internal/constant"
 )
 
-// SaveToFile 保存内容到文件
+// SaveToFile 保存内容到文件（通用版本）
 //
 // 功能：将内容保存到指定的文件路径，自动创建目录
 //
 // 参数：
-//   - novelID: 小说ID（0表示临时文件）
+//   - author: 作者名称
+//   - novelID: 小说ID（必填）
 //   - novelName: 小说名称
-//   - stage: 阶段名称（如"生成"、"扩写"、"润色"）
+//   - fileType: 文件类型（outline/volume/chapter）
+//   - stage: 阶段名称（如"生成"、"扩写"、"润色"、"分卷"等）
 //   - content: 要保存的内容
 //
 // 返回值：
 //   - error: 保存失败时返回错误
 //
-// 文件路径格式：data/content/{小说ID-名称}/abstract/{阶段}.md
-func SaveToFile(novelID uint, novelName, stage, content string) error {
-	// 构建文件路径：data/content/{小说ID-名称}/abstract/{阶段}.md
-	var dirName string
-	if novelID > 0 {
-		dirName = fmt.Sprintf("%d-%s", novelID, novelName)
-	} else {
-		// 如果没有ID，使用临时名称
-		dirName = fmt.Sprintf("temp-%s", novelName)
-	}
-
-	dir := filepath.Join("data", "content", dirName, "abstract")
+// 文件路径格式：data/{作者名称}/{小说ID-名称}/{fileType}/{阶段}.md
+func SaveToFile(author string, novelID uint, novelName, fileType, stage, content string) error {
+	// 构建文件路径：data/{作者名称}/{小说ID-名称}/{fileType}/{阶段}.md
+	dirName := fmt.Sprintf("%d-%s", novelID, novelName)
+	dir := filepath.Join(constant.DataDir, author, dirName, fileType)
 
 	// 创建目录（如果不存在）
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -38,7 +34,7 @@ func SaveToFile(novelID uint, novelName, stage, content string) error {
 	}
 
 	// 构建文件路径
-	filePath := filepath.Join(dir, fmt.Sprintf("%s.md", stage))
+	filePath := filepath.Join(dir, stage+constant.FileExtension)
 
 	// 写入文件
 	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
@@ -48,27 +44,23 @@ func SaveToFile(novelID uint, novelName, stage, content string) error {
 	return nil
 }
 
-// LoadFromFile 从文件加载内容（用于断点续传）
+// LoadFromFile 从文件加载内容（用于断点续传，通用版本）
 //
 // 功能：从指定路径加载文件内容
 //
 // 参数：
-//   - novelID: 小说ID（0表示临时文件）
+//   - author: 作者名称
+//   - novelID: 小说ID（必填）
 //   - novelName: 小说名称
-//   - stage: 阶段名称（如"生成"、"扩写"、"润色"）
+//   - fileType: 文件类型（outline/volume/chapter）
+//   - stage: 阶段名称（如"生成"、"扩写"、"润色"、"分卷"等）
 //
 // 返回值：
 //   - string: 文件内容，文件不存在时返回空字符串
 //   - error: 读取失败时返回错误（文件不存在不算错误）
-func LoadFromFile(novelID uint, novelName, stage string) (string, error) {
-	var dirName string
-	if novelID > 0 {
-		dirName = fmt.Sprintf("%d-%s", novelID, novelName)
-	} else {
-		dirName = fmt.Sprintf("temp-%s", novelName)
-	}
-
-	filePath := filepath.Join("data", "content", dirName, "abstract", fmt.Sprintf("%s.md", stage))
+func LoadFromFile(author string, novelID uint, novelName, fileType, stage string) (string, error) {
+	dirName := fmt.Sprintf("%d-%s", novelID, novelName)
+	filePath := filepath.Join(constant.DataDir, author, dirName, fileType, stage+constant.FileExtension)
 
 	content, err := os.ReadFile(filePath)
 	if err != nil {

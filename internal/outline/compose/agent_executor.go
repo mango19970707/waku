@@ -3,7 +3,7 @@ package compose
 import (
 	"context"
 	"fmt"
-	"waku/internal/novel/agents"
+	"waku/internal/outline/agents"
 
 	einoModel "github.com/cloudwego/eino/components/model"
 )
@@ -40,7 +40,7 @@ func (e *agentExecutorImpl) ExpandOutline(ctx context.Context, chatModel einoMod
 }
 
 func (e *agentExecutorImpl) PolishOutline(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre string) (string, error) {
-	agent, err := agents.NewOutlinePolisherAgent(ctx, chatModel, nil, nil)
+	agent, err := agents.NewOutlinePolisherAgent(ctx, chatModel)
 	if err != nil {
 		return "", fmt.Errorf("创建润色 Agent 失败: %w", err)
 	}

@@ -91,7 +91,7 @@ const ChapterPartitionPrompt = `你是一位资深的小说章节规划专家，
 
 请严格按照以下 JSON 格式输出（必须是有效的 JSON）：
 
-\`\`\`json
+` + "```json" + `
 {
   "chapters": [
     {
@@ -108,7 +108,7 @@ const ChapterPartitionPrompt = `你是一位资深的小说章节规划专家，
     }
   ]
 }
-\`\`\`
+` + "```" + `
 
 ## 章节划分技巧
 

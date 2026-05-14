@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"waku/internal/constant"
 	"waku/internal/model"
 	"waku/internal/utils"
 
@@ -124,13 +125,10 @@ func setupTestDB(t *testing.T) *gorm.DB {
 }
 
 // cleanupTestFiles 清理测试文件
-func cleanupTestFiles(novelName string) {
-	// 清理 temp- 前缀的目录
-	dir := filepath.Join("data", "content", "temp-"+novelName)
+func cleanupTestFiles(author, novelName string) {
+	// 清理作者目录下的所有测试文件
+	dir := filepath.Join("data", author)
 	os.RemoveAll(dir)
-	// 也清理可能存在的带ID的目录
-	dir2 := filepath.Join("data", "content", novelName)
-	os.RemoveAll(dir2)
 }
 
 // ==================== 测试用例 ====================
@@ -157,12 +155,13 @@ func TestOutlineWorkflowGraph_Success(t *testing.T) {
 	// 准备输入
 	input := &OutlineWorkflowInput{
 		NovelName:       "测试小说",
+		Author:          "测试作者",
 		Genre:           "玄幻",
 		OriginalOutline: "一个少年的修仙之路",
 	}
 
 	// 清理测试文件
-	defer cleanupTestFiles(input.NovelName)
+	defer cleanupTestFiles(input.Author, input.NovelName)
 
 	// 执行工作流
 	result, err := ExecuteOutlineWorkflow(ctx, graph, input)
@@ -194,8 +193,8 @@ func TestOutlineWorkflowGraph_Success(t *testing.T) {
 	// 验证文件是否创建
 	stages := []string{"生成", "扩写", "润色"}
 	for _, stage := range stages {
-		// 文件路径格式：data/content/temp-{小说名称}/abstract/{阶段}.md
-		filePath := filepath.Join("data", "content", "temp-"+input.NovelName, "abstract", stage+".md")
+		// 文件路径格式：data/{作者名称}/{小说ID-名称}/abstract/{阶段}.md
+		filePath := filepath.Join("data", input.Author, fmt.Sprintf("%d-%s", result.NovelID, input.NovelName), "abstract", stage+".md")
 		if _, err := os.Stat(filePath); os.IsNotExist(err) {
 			t.Errorf("文件不存在: %s", filePath)
 		}
@@ -226,12 +225,13 @@ func TestOutlineWorkflowGraph_RetryOnFailure(t *testing.T) {
 	// 准备输入
 	input := &OutlineWorkflowInput{
 		NovelName:       "重试测试小说",
+		Author:          "测试作者",
 		Genre:           "都市",
 		OriginalOutline: "一个程序员的逆袭之路",
 	}
 
 	// 清理测试文件
-	defer cleanupTestFiles(input.NovelName)
+	defer cleanupTestFiles(input.Author, input.NovelName)
 
 	// 执行工作流
 	result, err := ExecuteOutlineWorkflow(ctx, graph, input)
@@ -269,12 +269,13 @@ func TestOutlineWorkflowGraph_MaxRetriesExceeded(t *testing.T) {
 	// 准备输入
 	input := &OutlineWorkflowInput{
 		NovelName:       "失败测试小说",
+		Author:          "测试作者",
 		Genre:           "科幻",
 		OriginalOutline: "星际探险故事",
 	}
 
 	// 清理测试文件
-	defer cleanupTestFiles(input.NovelName)
+	defer cleanupTestFiles(input.Author, input.NovelName)
 
 	// 执行工作流（应该失败）
 	_, err = ExecuteOutlineWorkflow(ctx, graph, input)
@@ -307,12 +308,13 @@ func TestOutlineWorkflowGraph_ResumeFromCheckpoint(t *testing.T) {
 	// 准备输入
 	input := &OutlineWorkflowInput{
 		NovelName:       "断点续传测试",
+		Author:          "测试作者",
 		Genre:           "武侠",
 		OriginalOutline: "江湖恩怨录",
 	}
 
 	// 清理测试文件
-	defer cleanupTestFiles(input.NovelName)
+	defer cleanupTestFiles(input.Author, input.NovelName)
 
 	// 第一次执行：完整流程
 	t.Log("\n--- 第一次执行：完整流程 ---")
@@ -374,16 +376,18 @@ func TestOutlineWorkflowGraph_PartialResume(t *testing.T) {
 	// 准备输入
 	input := &OutlineWorkflowInput{
 		NovelName:       "部分断点测试",
+		Author:          "测试作者",
 		Genre:           "奇幻",
 		OriginalOutline: "魔法世界的冒险",
 	}
 
 	// 清理测试文件
-	defer cleanupTestFiles(input.NovelName)
+	defer cleanupTestFiles(input.Author, input.NovelName)
 
 	// 预先创建"生成"阶段的文件
 	generatedContent := "# 预先生成的大纲\n\n这是预先保存的生成大纲。"
-	if err := utils.SaveToFile(0, input.NovelName, "生成", generatedContent); err != nil {
+	// 注意：这里使用 NovelID=1 来模拟已有小说的情况
+	if err := utils.SaveToFile(input.Author, 1, input.NovelName, constant.FileTypeOutline, constant.StageGenerate, generatedContent); err != nil {
 		t.Fatalf("预先保存文件失败: %v", err)
 	}
 
@@ -439,9 +443,19 @@ func TestOutlineWorkflowGraph_InvalidInput(t *testing.T) {
 		input *OutlineWorkflowInput
 	}{
 		{
+			name: "作者名称为空",
+			input: &OutlineWorkflowInput{
+				NovelName:       "测试小说",
+				Author:          "",
+				Genre:           "玄幻",
+				OriginalOutline: "测试大纲",
+			},
+		},
+		{
 			name: "小说名称为空",
 			input: &OutlineWorkflowInput{
 				NovelName:       "",
+				Author:          "测试作者",
 				Genre:           "玄幻",
 				OriginalOutline: "测试大纲",
 			},
@@ -450,6 +464,7 @@ func TestOutlineWorkflowGraph_InvalidInput(t *testing.T) {
 			name: "小说类型为空",
 			input: &OutlineWorkflowInput{
 				NovelName:       "测试小说",
+				Author:          "测试作者",
 				Genre:           "",
 				OriginalOutline: "测试大纲",
 			},
@@ -458,6 +473,7 @@ func TestOutlineWorkflowGraph_InvalidInput(t *testing.T) {
 			name: "原始大纲为空",
 			input: &OutlineWorkflowInput{
 				NovelName:       "测试小说",
+				Author:          "测试作者",
 				Genre:           "玄幻",
 				OriginalOutline: "",
 			},

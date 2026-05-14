@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"waku/internal/novel/prompts"
+	"waku/internal/outline/prompts"
 	"waku/internal/utils"
 
 	"github.com/cloudwego/eino/adk"

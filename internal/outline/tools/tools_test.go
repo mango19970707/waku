@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
-	"waku/internal/novel/repository"
+	"waku/internal/outline/repository"
 
 	"waku/internal/model"
 

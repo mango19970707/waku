@@ -3,10 +3,11 @@ package compose
 import (
 	"context"
 	"fmt"
+	"waku/internal/constant"
 	"waku/internal/model"
+	"waku/internal/utils"
 	"waku/internal/volume/agents"
 	"waku/internal/volume/repository"
-	"waku/internal/volume/utils"
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"gorm.io/gorm"
@@ -29,7 +30,7 @@ func initVolumePartitionNode(db *gorm.DB) func(context.Context, *VolumePartition
 			NovelName:    novel.Title,
 			Genre:        novel.Genre,
 			NovelOutline: novel.Outline,
-			MaxRetries:   3, // 默认最大重试次数为3
+			MaxRetries:   constant.MaxRetries,
 		}
 
 		fmt.Printf("  ✓ 小说信息加载完成\n")
@@ -42,23 +43,27 @@ func initVolumePartitionNode(db *gorm.DB) func(context.Context, *VolumePartition
 }
 
 // partitionVolumesNode 分卷节点
-func partitionVolumesNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *VolumePartitionWorkflowState) (*VolumePartitionWorkflowState, error) {
+func partitionVolumesNode(ctx context.Context, chatModel einoModel.BaseChatModel, db *gorm.DB) func(context.Context, *VolumePartitionWorkflowState) (*VolumePartitionWorkflowState, error) {
 	return func(ctx context.Context, state *VolumePartitionWorkflowState) (*VolumePartitionWorkflowState, error) {
 		fmt.Printf("\n🤖 [分卷] 开始划分卷...\n")
 
 		// 尝试从文件加载（断点续传）
 		if state.PartitionedVolumes == "" {
-			existingContent, err := utils.LoadVolumeFile(state.NovelID, state.NovelName, "分卷")
-			if err != nil {
-				state.ErrorMsg = fmt.Sprintf("加载已有内容失败: %v", err)
-				state.CurrentNode = "partition_failed"
-				return state, nil
-			}
-			if existingContent != "" {
-				fmt.Printf("  ✓ 从文件加载已有内容\n")
-				state.PartitionedVolumes = existingContent
-				state.CurrentNode = "partition_success"
-				return state, nil
+			// 需要获取作者信息，从数据库查询
+			var novel model.Novel
+			if err := db.First(&novel, state.NovelID).Error; err == nil {
+				existingContent, err := utils.LoadFromFile(novel.Author, state.NovelID, state.NovelName, constant.FileTypeVolume, constant.StagePartition)
+				if err != nil {
+					state.ErrorMsg = fmt.Sprintf("加载已有内容失败: %v", err)
+					state.CurrentNode = "partition_failed"
+					return state, nil
+				}
+				if existingContent != "" {
+					fmt.Printf("  ✓ 从文件加载已有内容\n")
+					state.PartitionedVolumes = existingContent
+					state.CurrentNode = "partition_success"
+					return state, nil
+				}
 			}
 		}
 
@@ -74,7 +79,14 @@ func partitionVolumesNode(ctx context.Context, chatModel einoModel.BaseChatModel
 		state.PartitionedVolumes = result
 
 		// 保存到文件
-		if err := utils.SaveVolumeFile(state.NovelID, state.NovelName, "分卷", result); err != nil {
+		var novel model.Novel
+		if err := db.First(&novel, state.NovelID).Error; err != nil {
+			state.ErrorMsg = fmt.Sprintf("查询小说失败: %v", err)
+			state.CurrentNode = "partition_failed"
+			return state, nil
+		}
+
+		if err := utils.SaveToFile(novel.Author, state.NovelID, state.NovelName, constant.FileTypeVolume, constant.StagePartition, result); err != nil {
 			state.ErrorMsg = fmt.Sprintf("保存文件失败: %v", err)
 			state.CurrentNode = "partition_failed"
 			return state, nil
@@ -200,7 +212,7 @@ func saveVolumesToDBNode(db *gorm.DB, volumeRepo repository.VolumeRepository) fu
 }
 
 // partitionChaptersNode 为每个卷划分章节节点
-func partitionChaptersNode(ctx context.Context, chatModel einoModel.BaseChatModel, chapterRepo repository.ChapterRepository) func(context.Context, *VolumePartitionWorkflowState) (*VolumePartitionWorkflowState, error) {
+func partitionChaptersNode(ctx context.Context, chatModel einoModel.BaseChatModel, chapterRepo repository.ChapterRepository, db *gorm.DB) func(context.Context, *VolumePartitionWorkflowState) (*VolumePartitionWorkflowState, error) {
 	return func(ctx context.Context, state *VolumePartitionWorkflowState) (*VolumePartitionWorkflowState, error) {
 		fmt.Printf("\n🤖 [分章] 开始为每个卷划分章节...\n")
 
@@ -214,6 +226,14 @@ func partitionChaptersNode(ctx context.Context, chatModel einoModel.BaseChatMode
 		// 初始化章节划分映射
 		state.ChapterPartitionMap = make(map[uint][]agents.ChapterInfo)
 
+		// 获取作者信息
+		var novel model.Novel
+		if err := db.First(&novel, state.NovelID).Error; err != nil {
+			state.ErrorMsg = fmt.Sprintf("查询小说失败: %v", err)
+			state.CurrentNode = "partition_chapters_failed"
+			return state, nil
+		}
+
 		// 遍历每个卷，为其划分章节
 		for i, volumeInfo := range state.ExtractedVolumes.Volumes {
 			volumeID := state.SavedVolumeIDs[i]
@@ -222,8 +242,8 @@ func partitionChaptersNode(ctx context.Context, chatModel einoModel.BaseChatMode
 			fmt.Printf("\n  → 为第 %d 卷划分章节...\n", volumeNumber)
 
 			// 尝试从文件加载（断点续传）
-			stageName := fmt.Sprintf("第%d卷-章节", volumeNumber)
-			existingContent, err := utils.LoadVolumeFile(state.NovelID, state.NovelName, stageName)
+			stageName := constant.FormatChapterStage(volumeNumber)
+			existingContent, err := utils.LoadFromFile(novel.Author, state.NovelID, state.NovelName, constant.FileTypeVolume, stageName)
 			if err != nil {
 				state.ErrorMsg = fmt.Sprintf("加载第 %d 卷章节失败: %v", volumeNumber, err)
 				state.CurrentNode = "partition_chapters_failed"
@@ -246,7 +266,7 @@ func partitionChaptersNode(ctx context.Context, chatModel einoModel.BaseChatMode
 				chapterText = result
 
 				// 保存到文件
-				if err := utils.SaveVolumeFile(state.NovelID, state.NovelName, stageName, result); err != nil {
+				if err := utils.SaveToFile(novel.Author, state.NovelID, state.NovelName, constant.FileTypeVolume, stageName, result); err != nil {
 					state.ErrorMsg = fmt.Sprintf("保存第 %d 卷章节失败: %v", volumeNumber, err)
 					state.CurrentNode = "partition_chapters_failed"
 					return state, nil

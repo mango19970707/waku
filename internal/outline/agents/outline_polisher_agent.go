@@ -4,15 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"waku/internal/novel/prompts"
-	"waku/internal/novel/tools"
+	"waku/internal/outline/prompts"
 	"waku/internal/utils"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/model"
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/compose"
-	"gorm.io/gorm"
 )
 
 // OutlinePolisherInput 大纲润色器的输入参数
@@ -26,13 +22,10 @@ type OutlinePolisherInput struct {
 // NewOutlinePolisherAgent 创建小说大纲润色 Agent
 //
 // 功能：对已有的小说大纲进行深度润色和优化，提升大纲的质量和吸引力
-// 润色完成后可以使用 save_outline_to_database 工具将大纲保存到数据库
 //
 // 参数：
 //   - ctx: 上下文
 //   - chatModel: 聊天模型实例
-//   - db: 数据库连接（可选，如果提供则添加保存工具）
-//   - repo: 小说仓储实现（可选，如果提供 db 则必须提供）
 //
 // 返回值：
 //   - *adk.ChatModelAgent: 大纲润色 Agent
@@ -40,31 +33,17 @@ type OutlinePolisherInput struct {
 //
 // 使用示例：
 //
-//	agent, err := NewOutlinePolisherAgent(ctx, chatModel, db, repo)
+//	agent, err := NewOutlinePolisherAgent(ctx, chatModel)
 //	if err != nil {
 //	    return err
 //	}
 //	result, err := PolishOutline(ctx, agent, input)
-func NewOutlinePolisherAgent(ctx context.Context, chatModel model.BaseChatModel, db *gorm.DB, repo tools.Repository) (*adk.ChatModelAgent, error) {
+func NewOutlinePolisherAgent(ctx context.Context, chatModel model.BaseChatModel) (*adk.ChatModelAgent, error) {
 	config := &adk.ChatModelAgentConfig{
 		Name:        "OutlinePolisher",
-		Description: "小说大纲润色专家，对大纲进行深度优化和提升，并可将大纲保存到数据库",
+		Description: "小说大纲润色专家，对大纲进行深度优化和提升",
 		Instruction: prompts.OutlinePolisherPrompt,
 		Model:       chatModel,
-	}
-
-	// 如果提供了数据库连接和仓储，添加保存工具
-	if db != nil && repo != nil {
-		saveTool, err := tools.NewSaveOutlineTool(db, repo)
-		if err != nil {
-			return nil, fmt.Errorf("创建保存工具失败: %w", err)
-		}
-
-		config.ToolsConfig = adk.ToolsConfig{
-			ToolsNodeConfig: compose.ToolsNodeConfig{
-				Tools: []tool.BaseTool{saveTool},
-			},
-		}
 	}
 
 	polisherAgent, err := utils.NewChatModelAgent(ctx, config)

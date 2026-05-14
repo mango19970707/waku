@@ -126,10 +126,10 @@ func BuildVolumePartitionWorkflowGraph(
 
 	// 添加节点
 	graph.AddLambdaNode("init", compose.InvokableLambda(initVolumePartitionNode(db)))
-	graph.AddLambdaNode("partition", compose.InvokableLambda(partitionVolumesNode(ctx, chatModel)))
+	graph.AddLambdaNode("partition", compose.InvokableLambda(partitionVolumesNode(ctx, chatModel, db)))
 	graph.AddLambdaNode("extract", compose.InvokableLambda(extractVolumesNode(ctx, chatModel)))
 	graph.AddLambdaNode("saveVolumes", compose.InvokableLambda(saveVolumesToDBNode(db, volumeRepo)))
-	graph.AddLambdaNode("partitionChapters", compose.InvokableLambda(partitionChaptersNode(ctx, chatModel, chapterRepo)))
+	graph.AddLambdaNode("partitionChapters", compose.InvokableLambda(partitionChaptersNode(ctx, chatModel, chapterRepo, db)))
 
 	// 添加边
 	graph.AddEdge(compose.START, "init")

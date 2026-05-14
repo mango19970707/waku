@@ -7,8 +7,9 @@ import (
 	"os"
 	"strings"
 
+	"waku/internal/constant"
 	"waku/internal/model"
-	"waku/internal/novel/tools"
+	"waku/internal/outline/tools"
 	"waku/internal/utils"
 
 	einoModel "github.com/cloudwego/eino/components/model"
@@ -23,9 +24,10 @@ func initNode(ctx context.Context, input *OutlineWorkflowInput) (*OutlineWorkflo
 		CurrentNode:     "init",
 		NovelID:         input.NovelID,
 		NovelName:       input.NovelName,
+		Author:          input.Author,
 		Genre:           input.Genre,
 		OriginalOutline: input.OriginalOutline,
-		MaxRetries:      3, // 默认最大重试次数为3
+		MaxRetries:      constant.MaxRetries,
 	}
 
 	fmt.Printf("  ✓ 状态初始化完成\n")
@@ -37,9 +39,16 @@ func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(c
 	return func(ctx context.Context, state *OutlineWorkflowState) (*OutlineWorkflowState, error) {
 		fmt.Printf("\n🤖 [生成] 开始生成大纲...\n")
 
-		// 尝试从文件加载（断点续传）
-		if state.GeneratedOutline == "" {
-			existingContent, err := utils.LoadFromFile(state.NovelID, state.NovelName, "生成")
+		// 如果已经生成过，跳过
+		if state.GeneratedOutline != "" {
+			fmt.Printf("  ✓ 已有生成的大纲，跳过\n")
+			state.CurrentNode = "generate_success"
+			return state, nil
+		}
+
+		// 尝试从文件加载（断点续传，仅在有 NovelID 时）
+		if state.NovelID > 0 {
+			existingContent, err := utils.LoadFromFile(state.Author, state.NovelID, state.NovelName, constant.FileTypeOutline, constant.StageGenerate)
 			if err != nil {
 				state.ErrorMsg = fmt.Sprintf("加载已有内容失败: %v", err)
 				state.CurrentNode = "generate_failed"
@@ -61,17 +70,10 @@ func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(c
 			return state, nil
 		}
 
-		// 保存结果
+		// 保存结果到状态（不立即写文件）
 		state.GeneratedOutline = result
 
-		// 保存到文件
-		if err := utils.SaveToFile(state.NovelID, state.NovelName, "生成", result); err != nil {
-			state.ErrorMsg = fmt.Sprintf("保存文件失败: %v", err)
-			state.CurrentNode = "generate_failed"
-			return state, nil
-		}
-
-		fmt.Printf("  ✓ 大纲生成完成，已保存到文件\n")
+		fmt.Printf("  ✓ 大纲生成完成\n")
 		state.CurrentNode = "generate_success"
 		state.RetryCount = 0
 		return state, nil
@@ -83,9 +85,16 @@ func expandNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 	return func(ctx context.Context, state *OutlineWorkflowState) (*OutlineWorkflowState, error) {
 		fmt.Printf("\n🤖 [扩写] 开始扩写大纲...\n")
 
-		// 尝试从文件加载（断点续传）
-		if state.ExpandedOutline == "" {
-			existingContent, err := utils.LoadFromFile(state.NovelID, state.NovelName, "扩写")
+		// 如果已经扩写过，跳过
+		if state.ExpandedOutline != "" {
+			fmt.Printf("  ✓ 已有扩写的大纲，跳过\n")
+			state.CurrentNode = "expand_success"
+			return state, nil
+		}
+
+		// 尝试从文件加载（断点续传，仅在有 NovelID 时）
+		if state.NovelID > 0 {
+			existingContent, err := utils.LoadFromFile(state.Author, state.NovelID, state.NovelName, constant.FileTypeOutline, constant.StageExpand)
 			if err != nil {
 				state.ErrorMsg = fmt.Sprintf("加载已有内容失败: %v", err)
 				state.CurrentNode = "expand_failed"
@@ -107,17 +116,10 @@ func expandNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			return state, nil
 		}
 
-		// 保存结果
+		// 保存结果到状态（不立即写文件）
 		state.ExpandedOutline = result
 
-		// 保存到文件
-		if err := utils.SaveToFile(state.NovelID, state.NovelName, "扩写", result); err != nil {
-			state.ErrorMsg = fmt.Sprintf("保存文件失败: %v", err)
-			state.CurrentNode = "expand_failed"
-			return state, nil
-		}
-
-		fmt.Printf("  ✓ 大纲扩写完成，已保存到文件\n")
+		fmt.Printf("  ✓ 大纲扩写完成\n")
 		state.CurrentNode = "expand_success"
 		state.RetryCount = 0
 		return state, nil
@@ -129,9 +131,16 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 	return func(ctx context.Context, state *OutlineWorkflowState) (*OutlineWorkflowState, error) {
 		fmt.Printf("\n🤖 [润色] 开始润色大纲...\n")
 
-		// 尝试从文件加载（断点续传）
-		if state.PolishedOutline == "" {
-			existingContent, err := utils.LoadFromFile(state.NovelID, state.NovelName, "润色")
+		// 如果已经润色过，跳过
+		if state.PolishedOutline != "" {
+			fmt.Printf("  ✓ 已有润色的大纲，跳过\n")
+			state.CurrentNode = "polish_success"
+			return state, nil
+		}
+
+		// 尝试从文件加载（断点续传，仅在有 NovelID 时）
+		if state.NovelID > 0 {
+			existingContent, err := utils.LoadFromFile(state.Author, state.NovelID, state.NovelName, constant.FileTypeOutline, constant.StagePolish)
 			if err != nil {
 				state.ErrorMsg = fmt.Sprintf("加载已有内容失败: %v", err)
 				state.CurrentNode = "polish_failed"
@@ -153,17 +162,10 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			return state, nil
 		}
 
-		// 保存结果
+		// 保存结果到状态（不立即写文件）
 		state.PolishedOutline = result
 
-		// 保存到文件
-		if err := utils.SaveToFile(state.NovelID, state.NovelName, "润色", result); err != nil {
-			state.ErrorMsg = fmt.Sprintf("保存文件失败: %v", err)
-			state.CurrentNode = "polish_failed"
-			return state, nil
-		}
-
-		fmt.Printf("  ✓ 大纲润色完成，已保存到文件\n")
+		fmt.Printf("  ✓ 大纲润色完成\n")
 		state.CurrentNode = "polish_success"
 		state.RetryCount = 0
 		return state, nil
@@ -317,6 +319,7 @@ func saveToDBNode(db *gorm.DB, repo tools.Repository) func(context.Context, *Out
 
 			// 更新字段
 			existingNovel.Title = state.ExtractedInfo.NovelTitle
+			existingNovel.Author = state.Author
 			existingNovel.Genre = state.Genre
 			existingNovel.Synopsis = state.ExtractedInfo.Synopsis
 			existingNovel.Outline = state.ExtractedInfo.Outline
@@ -338,7 +341,7 @@ func saveToDBNode(db *gorm.DB, repo tools.Repository) func(context.Context, *Out
 
 			novel := &model.Novel{
 				Title:             state.ExtractedInfo.NovelTitle,
-				Author:            "AI创作",
+				Author:            state.Author,
 				Genre:             state.Genre,
 				Synopsis:          state.ExtractedInfo.Synopsis,
 				Outline:           state.ExtractedInfo.Outline,
@@ -358,6 +361,38 @@ func saveToDBNode(db *gorm.DB, repo tools.Repository) func(context.Context, *Out
 			state.NovelID = novel.ID // 更新状态中的 NovelID
 			fmt.Printf("  ✓ 保存成功，小说ID: %d\n", state.SavedNovelID)
 		}
+
+		// 保存到数据库成功后，一次性保存所有阶段的 md 文档
+		fmt.Printf("\n🤖 [保存] 开始保存所有阶段的文档到文件...\n")
+
+		// 保存生成阶段
+		if state.GeneratedOutline != "" {
+			if err := utils.SaveToFile(state.Author, state.NovelID, state.NovelName, constant.FileTypeOutline, constant.StageGenerate, state.GeneratedOutline); err != nil {
+				fmt.Printf("  ⚠️  保存生成阶段文件失败: %v\n", err)
+			} else {
+				fmt.Printf("  ✓ 生成阶段文档已保存\n")
+			}
+		}
+
+		// 保存扩写阶段
+		if state.ExpandedOutline != "" {
+			if err := utils.SaveToFile(state.Author, state.NovelID, state.NovelName, constant.FileTypeOutline, constant.StageExpand, state.ExpandedOutline); err != nil {
+				fmt.Printf("  ⚠️  保存扩写阶段文件失败: %v\n", err)
+			} else {
+				fmt.Printf("  ✓ 扩写阶段文档已保存\n")
+			}
+		}
+
+		// 保存润色阶段
+		if state.PolishedOutline != "" {
+			if err := utils.SaveToFile(state.Author, state.NovelID, state.NovelName, constant.FileTypeOutline, constant.StagePolish, state.PolishedOutline); err != nil {
+				fmt.Printf("  ⚠️  保存润色阶段文件失败: %v\n", err)
+			} else {
+				fmt.Printf("  ✓ 润色阶段文档已保存\n")
+			}
+		}
+
+		fmt.Printf("  ✓ 所有阶段文档保存完成\n")
 
 		state.CurrentNode = "save_success"
 		state.RetryCount = 0
@@ -382,14 +417,16 @@ func initRevisionNode(db *gorm.DB) func(context.Context, *OutlineRevisionWorkflo
 			CurrentNode:     "init",
 			NovelID:         novel.ID,
 			NovelName:       novel.Title,
+			Author:          novel.Author,
 			Genre:           novel.Genre,
 			OriginalOutline: novel.Outline,
 			UserSuggestion:  input.UserSuggestion,
-			MaxRetries:      3, // 默认最大重试次数为3
+			MaxRetries:      constant.MaxRetries,
 		}
 
 		fmt.Printf("  ✓ 小说信息加载完成\n")
 		fmt.Printf("    - 标题: %s\n", novel.Title)
+		fmt.Printf("    - 作者: %s\n", novel.Author)
 		fmt.Printf("    - 类型: %s\n", novel.Genre)
 		fmt.Printf("    - 大纲长度: %d 字符\n", len(novel.Outline))
 
@@ -414,7 +451,7 @@ func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 		state.RevisedOutline = result
 
 		// 保存到文件
-		if err := utils.SaveToFile(state.NovelID, state.NovelName, "修改", result); err != nil {
+		if err := utils.SaveToFile(state.Author, state.NovelID, state.NovelName, constant.FileTypeOutline, constant.StageRevise, result); err != nil {
 			state.ErrorMsg = fmt.Sprintf("保存文件失败: %v", err)
 			state.CurrentNode = "revise_failed"
 			return state, nil
@@ -481,6 +518,7 @@ func updateDBNode(db *gorm.DB) func(context.Context, *OutlineRevisionWorkflowSta
 
 		// 更新字段
 		existingNovel.Title = state.ExtractedInfo.NovelTitle
+		existingNovel.Author = state.Author
 		existingNovel.Genre = state.Genre
 		existingNovel.Synopsis = state.ExtractedInfo.Synopsis
 		existingNovel.Outline = state.ExtractedInfo.Outline

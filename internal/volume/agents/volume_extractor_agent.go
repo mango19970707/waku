@@ -80,27 +80,51 @@ func ExtractVolumeInfo(ctx context.Context, agent *adk.ChatModelAgent, input *Vo
 
 请以 JSON 格式输出提取的卷信息。`, input.Genre, input.PartitionedText)
 
-	// 创建 Runner 并执行查询（不启用流式输出，因为需要完整的 JSON）
+	// 创建 Runner 并执行查询
 	runner := adk.NewRunner(ctx, adk.RunnerConfig{
-		EnableStreaming: false,
+		EnableStreaming: true,
 		Agent:           agent,
 	})
 
+	iter := runner.Query(ctx, query)
+
 	slog.Info("[VolumeExtractor] 开始提取卷信息...")
 
-	// 执行查询
-	result, err := runner.Invoke(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("提取卷信息失败: %w", err)
+	// 收集响应内容
+	var result string
+	var lastMessage *schema.Message
+	for {
+		event, ok := iter.Next()
+		if !ok {
+			break
+		}
+
+		if event.Err != nil {
+			return nil, fmt.Errorf("提取卷信息失败: %w", event.Err)
+		}
+
+		// 获取消息内容
+		if event.Output != nil {
+			if msg, _, err := adk.GetMessage(event); err == nil {
+				if msg.Content != "" {
+					slog.Info(msg.Content)
+					result += msg.Content
+				}
+				lastMessage = msg
+			}
+		}
 	}
 
-	// 获取最后一条消息
-	messages := result.GetMessages()
-	if len(messages) == 0 {
-		return nil, fmt.Errorf("未获取到响应消息")
-	}
+	slog.Info("[VolumeExtractor] 卷信息提取完成")
 
-	lastMessage := messages[len(messages)-1]
+	// 使用 JSON 解析器解析输出
+	if lastMessage == nil {
+		lastMessage = &schema.Message{
+			Content: result,
+		}
+	} else {
+		lastMessage.Content = result
+	}
 
 	// 使用 MessageJSONParser 解析 JSON 输出
 	parserConfig := &schema.MessageJSONParseConfig{
@@ -110,12 +134,12 @@ func ExtractVolumeInfo(ctx context.Context, agent *adk.ChatModelAgent, input *Vo
 
 	output, err := parser.Parse(ctx, lastMessage)
 	if err != nil {
-		return nil, fmt.Errorf("解析 JSON 输出失败: %w", err)
+		return nil, fmt.Errorf("解析 JSON 输出失败: %w\n原始输出: %s", err, result)
 	}
 
 	slog.Info(fmt.Sprintf("[VolumeExtractor] 提取完成，共 %d 个卷", len(output.Volumes)))
 
-	return output, nil
+	return &output, nil
 }
 
 // ExtractChapterInfo 提取章节信息（从分章文本中提取结构化信息）
@@ -181,25 +205,49 @@ func ExtractChapterInfo(ctx context.Context, chatModel model.BaseChatModel, part
 
 	// 创建 Runner 并执行查询
 	runner := adk.NewRunner(ctx, adk.RunnerConfig{
-		EnableStreaming: false,
+		EnableStreaming: true,
 		Agent:           agent,
 	})
 
+	iter := runner.Query(ctx, query)
+
 	slog.Info("[ChapterExtractor] 开始提取章节信息...")
 
-	// 执行查询
-	result, err := runner.Invoke(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("提取章节信息失败: %w", err)
+	// 收集响应内容
+	var result string
+	var lastMessage *schema.Message
+	for {
+		event, ok := iter.Next()
+		if !ok {
+			break
+		}
+
+		if event.Err != nil {
+			return nil, fmt.Errorf("提取章节信息失败: %w", event.Err)
+		}
+
+		// 获取消息内容
+		if event.Output != nil {
+			if msg, _, err := adk.GetMessage(event); err == nil {
+				if msg.Content != "" {
+					slog.Info(msg.Content)
+					result += msg.Content
+				}
+				lastMessage = msg
+			}
+		}
 	}
 
-	// 获取最后一条消息
-	messages := result.GetMessages()
-	if len(messages) == 0 {
-		return nil, fmt.Errorf("未获取到响应消息")
-	}
+	slog.Info("[ChapterExtractor] 章节信息提取完成")
 
-	lastMessage := messages[len(messages)-1]
+	// 使用 JSON 解析器解析输出
+	if lastMessage == nil {
+		lastMessage = &schema.Message{
+			Content: result,
+		}
+	} else {
+		lastMessage.Content = result
+	}
 
 	// 使用 MessageJSONParser 解析 JSON 输出
 	parserConfig := &schema.MessageJSONParseConfig{
@@ -209,10 +257,10 @@ func ExtractChapterInfo(ctx context.Context, chatModel model.BaseChatModel, part
 
 	output, err := parser.Parse(ctx, lastMessage)
 	if err != nil {
-		return nil, fmt.Errorf("解析 JSON 输出失败: %w", err)
+		return nil, fmt.Errorf("解析 JSON 输出失败: %w\n原始输出: %s", err, result)
 	}
 
 	slog.Info(fmt.Sprintf("[ChapterExtractor] 提取完成，共 %d 个章节", len(output.Chapters)))
 
-	return output, nil
+	return &output, nil
 }

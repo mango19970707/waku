@@ -3,7 +3,7 @@ package compose
 import (
 	"context"
 	"fmt"
-	"waku/internal/novel/tools"
+	"waku/internal/outline/tools"
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"
@@ -18,6 +18,8 @@ type OutlineRevisionWorkflowState struct {
 	NovelID uint
 	// NovelName 小说名称
 	NovelName string
+	// Author 作者名称
+	Author string
 	// Genre 小说类型
 	Genre string
 	// OriginalOutline 原始大纲（从数据库加载）
