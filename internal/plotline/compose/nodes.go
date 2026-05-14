@@ -3,6 +3,7 @@ package compose
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -13,36 +14,55 @@ import (
 	"waku/internal/utils"
 
 	einoModel "github.com/cloudwego/eino/components/model"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
 // ==================== 提取工作流节点 ====================
 
-// initExtractNode 初始化提取工作流节点（将输入转换为状态）
-func initExtractNode(ctx context.Context, input *PlotlineExtractWorkflowInput) (*PlotlineExtractWorkflowState, error) {
-	fmt.Printf("\n🤖 [初始化] 准备工作流状态...\n")
+// initExtractNode 初始化提取工作流节点（从数据库加载小说信息）
+func initExtractNode(db *gorm.DB) func(context.Context, *PlotlineExtractWorkflowInput) (*PlotlineExtractWorkflowState, error) {
+	return func(ctx context.Context, input *PlotlineExtractWorkflowInput) (*PlotlineExtractWorkflowState, error) {
+		fmt.Printf("\n🤖 [初始化] 从数据库加载小说信息...\n")
 
-	state := &PlotlineExtractWorkflowState{
-		CurrentNode: "init",
-		NovelID:     input.NovelID,
-		NovelName:   input.NovelName,
-		Author:      input.Author,
-		Genre:       input.Genre,
-		Outline:     input.Outline,
-		MaxRetries:  constant.MaxRetries,
+		// 查询小说信息
+		var novel model.Novel
+		if err := db.First(&novel, input.NovelID).Error; err != nil {
+			return nil, fmt.Errorf("查询小说失败: %w", err)
+		}
+
+		// 检查大纲是否存在
+		if novel.Outline == "" {
+			return nil, fmt.Errorf("小说大纲为空，请先生成大纲")
+		}
+
+		state := &PlotlineExtractWorkflowState{
+			CurrentNode: "init",
+			NovelID:     novel.ID,
+			NovelName:   novel.Title,
+			Author:      novel.Author,
+			Genre:       novel.Genre,
+			Outline:     novel.Outline,
+			MaxRetries:  constant.MaxRetries,
+		}
+
+		fmt.Printf("  ✓ 小说信息加载完成\n")
+		fmt.Printf("    - 标题: %s\n", novel.Title)
+		fmt.Printf("    - 作者: %s\n", novel.Author)
+		fmt.Printf("    - 类型: %s\n", novel.Genre)
+		fmt.Printf("    - 大纲长度: %d 字符\n", len(novel.Outline))
+
+		return state, nil
 	}
-
-	fmt.Printf("  ✓ 状态初始化完成\n")
-	return state, nil
 }
 
-// extractNode 提取剧情线节点
+// extractNode 提取剧情线节点（使用 JSON parser 严格校验）
 func extractNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *PlotlineExtractWorkflowState) (*PlotlineExtractWorkflowState, error) {
 	return func(ctx context.Context, state *PlotlineExtractWorkflowState) (*PlotlineExtractWorkflowState, error) {
-		fmt.Printf("\n🤖 [提取] 开始从大纲提取剧情线...\n")
+		fmt.Printf("\n🤖 [提取] 开始从大纲提取剧情线（JSON 格式）...\n")
 
 		// 如果已经提取过，跳过
-		if state.ExtractedPlotline != "" {
+		if state.ExtractedPlotlines != "" {
 			fmt.Printf("  ✓ 已有提取的剧情线，跳过\n")
 			state.CurrentNode = "extract_success"
 			return state, nil
@@ -58,89 +78,42 @@ func extractNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(co
 			}
 			if existingContent != "" {
 				fmt.Printf("  ✓ 从文件加载已有内容\n")
-				state.ExtractedPlotline = existingContent
+				state.ExtractedPlotlines = existingContent
 				state.CurrentNode = "extract_success"
 				return state, nil
 			}
 		}
 
-		// 执行提取
-		result, err := agentExecutor.ExtractPlotline(ctx, chatModel, state.Outline, state.Genre)
+		// 执行提取（使用新的 JSON parser 方法）
+		output, err := agentExecutor.ExtractPlotlinesJSON(ctx, chatModel, state.Outline, state.Genre)
 		if err != nil {
 			state.ErrorMsg = fmt.Sprintf("提取剧情线失败: %v", err)
 			state.CurrentNode = "extract_failed"
 			return state, nil
 		}
 
-		// 保存结果到状态
-		state.ExtractedPlotline = result
-
-		// 保存到文件
-		if state.NovelName != "" {
-			if err := utils.SaveToFile(state.Author, constant.FileTypePlotline, constant.StageExtract, result); err != nil {
-				fmt.Printf("  ⚠️  保存文件失败: %v\n", err)
-			} else {
-				fmt.Printf("  ✓ 已保存到文件\n")
-			}
-		}
-
-		fmt.Printf("  ✓ 剧情线提取完成\n")
-		state.CurrentNode = "extract_success"
-		state.RetryCount = 0
-		return state, nil
-	}
-}
-
-// polishNode 润色剧情线节点
-func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *PlotlineExtractWorkflowState) (*PlotlineExtractWorkflowState, error) {
-	return func(ctx context.Context, state *PlotlineExtractWorkflowState) (*PlotlineExtractWorkflowState, error) {
-		fmt.Printf("\n🤖 [润色] 开始润色剧情线...\n")
-
-		// 如果已经润色过，跳过
-		if state.PolishedPlotline != "" {
-			fmt.Printf("  ✓ 已有润色的剧情线，跳过\n")
-			state.CurrentNode = "polish_success"
-			return state, nil
-		}
-
-		// 尝试从文件加载（断点续传）
-		if state.NovelID > 0 && state.NovelName != "" {
-			existingContent, err := utils.LoadFromFile(state.Author, constant.FileTypePlotline, constant.StagePolish)
-			if err != nil {
-				state.ErrorMsg = fmt.Sprintf("加载已有内容失败: %v", err)
-				state.CurrentNode = "polish_failed"
-				return state, nil
-			}
-			if existingContent != "" {
-				fmt.Printf("  ✓ 从文件加载已有内容\n")
-				state.PolishedPlotline = existingContent
-				state.CurrentNode = "polish_success"
-				return state, nil
-			}
-		}
-
-		// 执行润色
-		result, err := agentExecutor.PolishPlotline(ctx, chatModel, state.ExtractedPlotline, state.Genre)
+		// 将结果转换为 JSON 字符串
+		jsonBytes, err := json.MarshalIndent(output, "", "  ")
 		if err != nil {
-			state.ErrorMsg = fmt.Sprintf("润色剧情线失败: %v", err)
-			state.CurrentNode = "polish_failed"
+			state.ErrorMsg = fmt.Sprintf("序列化 JSON 失败: %v", err)
+			state.CurrentNode = "extract_failed"
 			return state, nil
 		}
 
 		// 保存结果到状态
-		state.PolishedPlotline = result
+		state.ExtractedPlotlines = string(jsonBytes)
 
 		// 保存到文件
 		if state.NovelName != "" {
-			if err := utils.SaveToFile(state.Author, constant.FileTypePlotline, constant.StagePolish, result); err != nil {
+			if err := utils.SaveToFile(state.Author, constant.FileTypePlotline, constant.StageExtract, state.ExtractedPlotlines); err != nil {
 				fmt.Printf("  ⚠️  保存文件失败: %v\n", err)
 			} else {
 				fmt.Printf("  ✓ 已保存到文件\n")
 			}
 		}
 
-		fmt.Printf("  ✓ 剧情线润色完成\n")
-		state.CurrentNode = "polish_success"
+		fmt.Printf("  ✓ 剧情线提取完成，共提取 %d 条剧情线\n", len(output.Plotlines))
+		state.CurrentNode = "extract_success"
 		state.RetryCount = 0
 		return state, nil
 	}
@@ -159,10 +132,12 @@ func getUserApproval(state *PlotlineExtractWorkflowState) (bool, string) {
 	fmt.Printf("小说类型: %s\n", state.Genre)
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
-	if state.NovelID > 0 {
-		fmt.Printf("⚠️  这将更新已有小说 (ID: %d)\n", state.NovelID)
-	} else {
-		fmt.Printf("📝 这将创建新小说\n")
+	// 解析剧情线数量
+	var output struct {
+		Plotlines []interface{} `json:"plotlines"`
+	}
+	if err := json.Unmarshal([]byte(state.ExtractedPlotlines), &output); err == nil {
+		fmt.Printf("提取的剧情线数量: %d\n", len(output.Plotlines))
 	}
 
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
@@ -194,109 +169,73 @@ func getUserApproval(state *PlotlineExtractWorkflowState) (bool, string) {
 	return false, reason
 }
 
-// saveToDBNode 保存到数据库节点
-func saveToDBNode(db *gorm.DB, repo repository.Repository) func(context.Context, *PlotlineExtractWorkflowState) (*PlotlineExtractWorkflowState, error) {
+// saveToDBNode 保存到数据库节点（批量插入多条剧情线）
+func saveToDBNode(db *gorm.DB, plotlineRepo repository.PlotlineRepository) func(context.Context, *PlotlineExtractWorkflowState) (*PlotlineExtractWorkflowState, error) {
 	return func(ctx context.Context, state *PlotlineExtractWorkflowState) (*PlotlineExtractWorkflowState, error) {
 		fmt.Printf("\n🤖 [保存] 准备保存到数据库...\n")
 
 		// 如果已经保存过，跳过
-		if state.SavedNovelID > 0 {
-			fmt.Printf("  ✓ 已保存，小说ID: %d\n", state.SavedNovelID)
+		if len(state.SavedPlotlineIDs) > 0 {
+			fmt.Printf("  ✓ 已保存，剧情线数量: %d\n", len(state.SavedPlotlineIDs))
 			state.CurrentNode = "save_success"
 			return state, nil
 		}
 
-		// 中断恢复逻辑：首次调用时触发中断，等待用户审批
-		if !state.WaitingForApproval {
-			// 首次调用：触发中断，等待用户审批
-			state.WaitingForApproval = true
-			state.CurrentNode = "save_waiting_approval"
-
-			// 获取用户审批
-			approved, reason := getUserApproval(state)
-			state.UserApproved = approved
-			state.DisapproveReason = reason
-
-			// 如果用户拒绝，直接返回失败
-			if !approved {
-				state.ErrorMsg = fmt.Sprintf("用户拒绝保存: %s", reason)
-				state.CurrentNode = "save_rejected"
-				state.WaitingForApproval = false
-				return state, nil
-			}
-
-			// 用户批准，继续执行保存逻辑
-			state.WaitingForApproval = false
+		// 解析 JSON 数据
+		var output struct {
+			Plotlines []struct {
+				Title        string `json:"title"`
+				Type         string `json:"type"`
+				Description  string `json:"description"`
+				StartChapter int    `json:"start_chapter"`
+				EndChapter   int    `json:"end_chapter"`
+			} `json:"plotlines"`
 		}
 
-		// 执行保存操作
-		fmt.Printf("\n🤖 [保存] 开始保存到数据库...\n")
-
-		// 判断是新增还是更新
-		if state.NovelID > 0 {
-			// 更新已有小说
-			fmt.Printf("  → 更新已有小说 (ID: %d)\n", state.NovelID)
-
-			// 查询已有小说
-			var existingNovel model.Novel
-			if err := db.First(&existingNovel, state.NovelID).Error; err != nil {
-				state.ErrorMsg = fmt.Sprintf("查询小说失败: %v", err)
-				state.CurrentNode = "save_failed"
-				return state, nil
-			}
-
-			// 更新字段
-			existingNovel.Title = state.NovelName
-			existingNovel.Author = state.Author
-			existingNovel.Genre = state.Genre
-
-			// 保存更新
-			if err := db.Save(&existingNovel).Error; err != nil {
-				state.ErrorMsg = fmt.Sprintf("更新小说失败: %v", err)
-				state.CurrentNode = "save_failed"
-				return state, nil
-			}
-
-			state.SavedNovelID = existingNovel.ID
-			fmt.Printf("  ✓ 更新成功，小说ID: %d\n", state.SavedNovelID)
-		} else {
-			// 新增小说
-			fmt.Printf("  → 创建新小说\n")
-
-			// 检查作者是否已有同名小说
-			isDuplicate, err := repo.CheckDuplicateByAuthorAndTitle(state.Author, state.NovelName)
-			if err != nil {
-				state.ErrorMsg = fmt.Sprintf("检查重名失败: %v", err)
-				state.CurrentNode = "save_failed"
-				return state, nil
-			}
-
-			if isDuplicate {
-				state.ErrorMsg = fmt.Sprintf("作者 %s 已有同名小说《%s》，请修改小说名称后重试", state.Author, state.NovelName)
-				state.CurrentNode = "save_failed"
-				fmt.Printf("  ❌ %s\n", state.ErrorMsg)
-				return state, nil
-			}
-
-			novel := &model.Novel{
-				Title:  state.NovelName,
-				Author: state.Author,
-				Genre:  state.Genre,
-				Status: "draft",
-			}
-
-			// 保存到数据库
-			if err := repo.Create(novel); err != nil {
-				state.ErrorMsg = fmt.Sprintf("保存到数据库失败: %v", err)
-				state.CurrentNode = "save_failed"
-				return state, nil
-			}
-
-			state.SavedNovelID = novel.ID
-			state.NovelID = novel.ID // 更新状态中的 NovelID
-			fmt.Printf("  ✓ 保存成功，小说ID: %d\n", state.SavedNovelID)
+		if err := json.Unmarshal([]byte(state.ExtractedPlotlines), &output); err != nil {
+			state.ErrorMsg = fmt.Sprintf("解析 JSON 失败: %v", err)
+			state.CurrentNode = "save_failed"
+			return state, nil
 		}
 
+		if len(output.Plotlines) == 0 {
+			state.ErrorMsg = "未提取到任何剧情线"
+			state.CurrentNode = "save_failed"
+			return state, nil
+		}
+
+		// 转换为 Plotline 模型
+		plotlines := make([]*model.Plotline, 0, len(output.Plotlines))
+		for _, item := range output.Plotlines {
+			plotline := &model.Plotline{
+				ID:           uuid.New().String(),
+				NovelID:      fmt.Sprintf("%d", state.NovelID),
+				Title:        item.Title,
+				Type:         item.Type,
+				Description:  item.Description,
+				Status:       "active",
+				StartChapter: item.StartChapter,
+				EndChapter:   item.EndChapter,
+			}
+			plotlines = append(plotlines, plotline)
+		}
+
+		fmt.Printf("  → 准备保存 %d 条剧情线\n", len(plotlines))
+
+		// 批量插入
+		if err := plotlineRepo.CreateBatch(plotlines); err != nil {
+			state.ErrorMsg = fmt.Sprintf("批量插入剧情线失败: %v", err)
+			state.CurrentNode = "save_failed"
+			return state, nil
+		}
+
+		// 收集 ID 列表
+		state.SavedPlotlineIDs = make([]string, 0, len(plotlines))
+		for _, plotline := range plotlines {
+			state.SavedPlotlineIDs = append(state.SavedPlotlineIDs, plotline.ID)
+		}
+
+		fmt.Printf("  ✓ 保存成功，剧情线数量: %d\n", len(state.SavedPlotlineIDs))
 		state.CurrentNode = "save_success"
 		state.RetryCount = 0
 		return state, nil
@@ -305,10 +244,10 @@ func saveToDBNode(db *gorm.DB, repo repository.Repository) func(context.Context,
 
 // ==================== 修改工作流节点 ====================
 
-// initRevisionNode 初始化修改工作流节点（从数据库加载小说信息）
-func initRevisionNode(db *gorm.DB) func(context.Context, *PlotlineRevisionWorkflowInput) (*PlotlineRevisionWorkflowState, error) {
+// initRevisionNode 初始化修改工作流节点（从数据库加载小说信息和剧情线）
+func initRevisionNode(db *gorm.DB, plotlineRepo repository.PlotlineRepository) func(context.Context, *PlotlineRevisionWorkflowInput) (*PlotlineRevisionWorkflowState, error) {
 	return func(ctx context.Context, input *PlotlineRevisionWorkflowInput) (*PlotlineRevisionWorkflowState, error) {
-		fmt.Printf("\n🤖 [初始化] 从数据库加载小说信息...\n")
+		fmt.Printf("\n🤖 [初始化] 从数据库加载小说信息和剧情线...\n")
 
 		// 查询小说信息
 		var novel model.Novel
@@ -316,74 +255,115 @@ func initRevisionNode(db *gorm.DB) func(context.Context, *PlotlineRevisionWorkfl
 			return nil, fmt.Errorf("查询小说失败: %w", err)
 		}
 
-		// 尝试从文件加载剧情线
-		plotline := ""
-		// 优先从润色阶段加载
-		if content, err := utils.LoadFromFile(novel.Author, constant.FileTypePlotline, constant.StagePolish); err == nil && content != "" {
-			plotline = content
-		} else if content, err := utils.LoadFromFile(novel.Author, constant.FileTypePlotline, constant.StageExtract); err == nil && content != "" {
-			plotline = content
+		// 检查大纲是否存在
+		if novel.Outline == "" {
+			return nil, fmt.Errorf("小说大纲为空，请先生成大纲")
 		}
 
-		if plotline == "" {
-			return nil, fmt.Errorf("未找到剧情线文件")
+		// 查询该小说的所有剧情线
+		plotlines, err := plotlineRepo.GetByNovelID(fmt.Sprintf("%d", novel.ID))
+		if err != nil {
+			return nil, fmt.Errorf("查询剧情线失败: %w", err)
+		}
+
+		if len(plotlines) == 0 {
+			return nil, fmt.Errorf("未找到任何剧情线，请先提取剧情线")
+		}
+
+		// 将剧情线转换为 JSON 格式
+		type PlotlineJSON struct {
+			ID           string `json:"id"`
+			Title        string `json:"title"`
+			Type         string `json:"type"`
+			Description  string `json:"description"`
+			StartChapter int    `json:"start_chapter"`
+			EndChapter   int    `json:"end_chapter"`
+		}
+
+		plotlinesJSON := make([]PlotlineJSON, 0, len(plotlines))
+		for _, p := range plotlines {
+			plotlinesJSON = append(plotlinesJSON, PlotlineJSON{
+				ID:           p.ID,
+				Title:        p.Title,
+				Type:         p.Type,
+				Description:  p.Description,
+				StartChapter: p.StartChapter,
+				EndChapter:   p.EndChapter,
+			})
+		}
+
+		jsonBytes, err := json.MarshalIndent(map[string]interface{}{
+			"plotlines": plotlinesJSON,
+		}, "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("序列化剧情线失败: %w", err)
 		}
 
 		state := &PlotlineRevisionWorkflowState{
-			CurrentNode:      "init",
-			NovelID:          novel.ID,
-			NovelName:        novel.Title,
-			Author:           novel.Author,
-			Genre:            novel.Genre,
-			OriginalPlotline: plotline,
-			UserSuggestion:   input.UserSuggestion,
-			MaxRetries:       constant.MaxRetries,
+			CurrentNode:       "init",
+			NovelID:           novel.ID,
+			NovelName:         novel.Title,
+			Author:            novel.Author,
+			Genre:             novel.Genre,
+			Outline:           novel.Outline,
+			ExistingPlotlines: string(jsonBytes),
+			UserSuggestion:    input.UserSuggestion,
+			MaxRetries:        constant.MaxRetries,
 		}
 
 		fmt.Printf("  ✓ 小说信息加载完成\n")
 		fmt.Printf("    - 标题: %s\n", novel.Title)
 		fmt.Printf("    - 作者: %s\n", novel.Author)
 		fmt.Printf("    - 类型: %s\n", novel.Genre)
-		fmt.Printf("    - 剧情线长度: %d 字符\n", len(plotline))
+		fmt.Printf("    - 大纲长度: %d 字符\n", len(novel.Outline))
+		fmt.Printf("    - 现有剧情线数量: %d\n", len(plotlines))
 
 		return state, nil
 	}
 }
 
-// polishRevisionNode 润色修改后的剧情线节点
-func polishRevisionNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
+// reviseNode 优化剧情线节点（使用 JSON parser 严格校验）
+func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
 	return func(ctx context.Context, state *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
-		fmt.Printf("\n🤖 [润色] 开始润色剧情线（根据用户建议）...\n")
+		fmt.Printf("\n🤖 [优化] 开始优化剧情线（根据用户建议）...\n")
 
-		// 执行润色（将用户建议融入润色过程）
-		// 构建包含用户建议的剧情线
-		plotlineWithSuggestion := fmt.Sprintf(`原始剧情线：
-%s
-
-用户修改建议：
-%s
-
-请根据用户的修改建议，对剧情线进行润色和优化。`, state.OriginalPlotline, state.UserSuggestion)
-
-		result, err := agentExecutor.PolishPlotline(ctx, chatModel, plotlineWithSuggestion, state.Genre)
-		if err != nil {
-			state.ErrorMsg = fmt.Sprintf("润色剧情线失败: %v", err)
-			state.CurrentNode = "polish_failed"
+		// 如果已经优化过，跳过
+		if state.RevisedPlotlines != "" {
+			fmt.Printf("  ✓ 已有优化的剧情线，跳过\n")
+			state.CurrentNode = "revise_success"
 			return state, nil
 		}
 
-		// 保存结果
-		state.RevisedPlotline = result
+		// 执行优化（使用新的 JSON parser 方法）
+		output, err := agentExecutor.RevisePlotlinesJSON(ctx, chatModel, state.Outline, state.Genre, state.ExistingPlotlines, state.UserSuggestion)
+		if err != nil {
+			state.ErrorMsg = fmt.Sprintf("优化剧情线失败: %v", err)
+			state.CurrentNode = "revise_failed"
+			return state, nil
+		}
+
+		// 将结果转换为 JSON 字符串
+		jsonBytes, err := json.MarshalIndent(output, "", "  ")
+		if err != nil {
+			state.ErrorMsg = fmt.Sprintf("序列化 JSON 失败: %v", err)
+			state.CurrentNode = "revise_failed"
+			return state, nil
+		}
+
+		// 保存结果到状态
+		state.RevisedPlotlines = string(jsonBytes)
 
 		// 保存到文件
-		if err := utils.SaveToFile(state.Author, constant.FileTypePlotline, constant.StageRevise, result); err != nil {
-			state.ErrorMsg = fmt.Sprintf("保存文件失败: %v", err)
-			state.CurrentNode = "polish_failed"
-			return state, nil
+		if state.NovelName != "" {
+			if err := utils.SaveToFile(state.Author, constant.FileTypePlotline, constant.StageRevise, state.RevisedPlotlines); err != nil {
+				fmt.Printf("  ⚠️  保存文件失败: %v\n", err)
+			} else {
+				fmt.Printf("  ✓ 已保存到文件\n")
+			}
 		}
 
-		fmt.Printf("  ✓ 剧情线润色完成，已保存到文件\n")
-		state.CurrentNode = "polish_success"
+		fmt.Printf("  ✓ 剧情线优化完成，共输出 %d 条剧情线\n", len(output.Plotlines))
+		state.CurrentNode = "revise_success"
 		state.RetryCount = 0
 		return state, nil
 	}
@@ -430,59 +410,97 @@ func getUserApprovalForRevision(state *PlotlineRevisionWorkflowState) (bool, str
 	return false, reason
 }
 
-// updateDBNode 更新数据库节点（修改工作流）
-func updateDBNode(db *gorm.DB) func(context.Context, *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
+// saveOrUpdateDBNode 保存或更新数据库节点（修改工作流）
+func saveOrUpdateDBNode(db *gorm.DB, plotlineRepo repository.PlotlineRepository) func(context.Context, *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
 	return func(ctx context.Context, state *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
-		fmt.Printf("\n🤖 [更新] 准备更新数据库...\n")
+		fmt.Printf("\n🤖 [保存] 准备保存或更新到数据库...\n")
 
-		// 中断恢复逻辑：首次调用时触发中断，等待用户审批
-		if !state.WaitingForApproval {
-			// 首次调用：触发中断，等待用户审批
-			state.WaitingForApproval = true
-			state.CurrentNode = "update_waiting_approval"
+		// 如果已经保存过，跳过
+		if len(state.SavedPlotlineIDs) > 0 {
+			fmt.Printf("  ✓ 已保存，剧情线数量: %d\n", len(state.SavedPlotlineIDs))
+			state.CurrentNode = "save_success"
+			return state, nil
+		}
 
-			// 获取用户审批
-			approved, reason := getUserApprovalForRevision(state)
-			state.UserApproved = approved
-			state.DisapproveReason = reason
+		// 解析 JSON 数据
+		var output struct {
+			Plotlines []struct {
+				ID           string `json:"id"`
+				Title        string `json:"title"`
+				Type         string `json:"type"`
+				Description  string `json:"description"`
+				StartChapter int    `json:"start_chapter"`
+				EndChapter   int    `json:"end_chapter"`
+			} `json:"plotlines"`
+		}
 
-			// 如果用户拒绝，直接返回失败
-			if !approved {
-				state.ErrorMsg = fmt.Sprintf("用户拒绝更新: %s", reason)
-				state.CurrentNode = "update_rejected"
-				state.WaitingForApproval = false
-				return state, nil
+		if err := json.Unmarshal([]byte(state.RevisedPlotlines), &output); err != nil {
+			state.ErrorMsg = fmt.Sprintf("解析 JSON 失败: %v", err)
+			state.CurrentNode = "save_failed"
+			return state, nil
+		}
+
+		if len(output.Plotlines) == 0 {
+			state.ErrorMsg = "未输出任何剧情线"
+			state.CurrentNode = "save_failed"
+			return state, nil
+		}
+
+		// 分类处理：更新现有剧情线 vs 插入新剧情线
+		var toUpdate []*model.Plotline
+		var toInsert []*model.Plotline
+		savedIDs := make([]string, 0, len(output.Plotlines))
+
+		for _, item := range output.Plotlines {
+			plotline := &model.Plotline{
+				ID:           item.ID,
+				NovelID:      fmt.Sprintf("%d", state.NovelID),
+				Title:        item.Title,
+				Type:         item.Type,
+				Description:  item.Description,
+				Status:       "active",
+				StartChapter: item.StartChapter,
+				EndChapter:   item.EndChapter,
 			}
 
-			// 用户批准，继续执行更新逻辑
-			state.WaitingForApproval = false
+			if item.ID != "" {
+				// 有 ID，尝试更新
+				toUpdate = append(toUpdate, plotline)
+				savedIDs = append(savedIDs, item.ID)
+			} else {
+				// 没有 ID，插入新记录
+				plotline.ID = uuid.New().String()
+				toInsert = append(toInsert, plotline)
+				savedIDs = append(savedIDs, plotline.ID)
+			}
 		}
 
-		// 执行更新操作
-		fmt.Printf("\n🤖 [更新] 开始更新数据库...\n")
+		fmt.Printf("  → 准备更新 %d 条剧情线\n", len(toUpdate))
+		fmt.Printf("  → 准备插入 %d 条剧情线\n", len(toInsert))
 
-		// 查询已有小说
-		var existingNovel model.Novel
-		if err := db.First(&existingNovel, state.NovelID).Error; err != nil {
-			state.ErrorMsg = fmt.Sprintf("查询小说失败: %v", err)
-			state.CurrentNode = "update_failed"
-			return state, nil
+		// 更新现有剧情线
+		for _, plotline := range toUpdate {
+			if err := plotlineRepo.Update(plotline); err != nil {
+				state.ErrorMsg = fmt.Sprintf("更新剧情线失败 (ID=%s): %v", plotline.ID, err)
+				state.CurrentNode = "save_failed"
+				return state, nil
+			}
 		}
 
-		// 更新字段
-		existingNovel.Title = state.NovelName
-		existingNovel.Author = state.Author
-		existingNovel.Genre = state.Genre
-
-		// 保存更新
-		if err := db.Save(&existingNovel).Error; err != nil {
-			state.ErrorMsg = fmt.Sprintf("更新小说失败: %v", err)
-			state.CurrentNode = "update_failed"
-			return state, nil
+		// 批量插入新剧情线
+		if len(toInsert) > 0 {
+			if err := plotlineRepo.CreateBatch(toInsert); err != nil {
+				state.ErrorMsg = fmt.Sprintf("批量插入剧情线失败: %v", err)
+				state.CurrentNode = "save_failed"
+				return state, nil
+			}
 		}
 
-		fmt.Printf("  ✓ 更新成功，小说ID: %d\n", existingNovel.ID)
-		state.CurrentNode = "update_success"
+		// 保存 ID 列表
+		state.SavedPlotlineIDs = savedIDs
+
+		fmt.Printf("  ✓ 保存成功，剧情线数量: %d\n", len(state.SavedPlotlineIDs))
+		state.CurrentNode = "save_success"
 		state.RetryCount = 0
 		return state, nil
 	}

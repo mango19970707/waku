@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"waku/internal/plotline/repository"
+
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"
 	"gorm.io/gorm"
@@ -11,17 +13,18 @@ import (
 
 // NewPlotlineRevisionWorkflow 创建剧情线修改工作流
 //
-// 功能：根据用户建议修改剧情线，并进行润色，最后更新到数据库
+// 功能：根据用户建议优化剧情线，并保存或更新到数据库
 //
 // 工作流程：
-//   1. init - 从数据库加载小说信息和剧情线
-//   2. polish - 根据用户建议润色剧情线
-//   3. updateDB - 更新到数据库（需要用户审批）
+//   1. init - 从数据库加载小说信息、大纲和现有剧情线
+//   2. revise - 根据用户建议优化剧情线（可以修改、删除、新增）
+//   3. saveOrUpdateDB - 保存或更新到数据库
 //
 // 参数：
 //   - ctx: 上下文
 //   - chatModel: 聊天模型实例
 //   - db: 数据库实例
+//   - plotlineRepo: 剧情线仓库实例
 //
 // 返回值：
 //   - compose.Runnable[*PlotlineRevisionWorkflowInput, *PlotlineRevisionWorkflowState]: 可执行的工作流
@@ -30,33 +33,34 @@ func NewPlotlineRevisionWorkflow(
 	ctx context.Context,
 	chatModel einoModel.BaseChatModel,
 	db *gorm.DB,
+	plotlineRepo repository.PlotlineRepository,
 ) (compose.Runnable[*PlotlineRevisionWorkflowInput, *PlotlineRevisionWorkflowState], error) {
 	// 创建工作流图
 	graph := compose.NewGraph[*PlotlineRevisionWorkflowInput, *PlotlineRevisionWorkflowState]()
 
 	// 添加节点
-	graph.AddLambdaNode("init", compose.InvokableLambda(initRevisionNode(db)))
-	graph.AddLambdaNode("polish", compose.InvokableLambda(polishRevisionNode(ctx, chatModel)))
-	graph.AddLambdaNode("updateDB", compose.InvokableLambda(updateDBNode(db)))
+	graph.AddLambdaNode("init", compose.InvokableLambda(initRevisionNode(db, plotlineRepo)))
+	graph.AddLambdaNode("revise", compose.InvokableLambda(reviseNode(ctx, chatModel)))
+	graph.AddLambdaNode("saveOrUpdateDB", compose.InvokableLambda(saveOrUpdateDBNode(db, plotlineRepo)))
 
 	// 添加边（定义节点之间的连接）
 	graph.AddEdge(compose.START, "init")
-	graph.AddEdge("init", "polish")
+	graph.AddEdge("init", "revise")
 
 	// 添加条件边（根据状态决定下一步）
-	graph.AddBranch("polish", compose.NewGraphBranch(
-		routeAfterPolishRevision,
+	graph.AddBranch("revise", compose.NewGraphBranch(
+		routeAfterRevise,
 		map[string]bool{
-			"updateDB": true,
-			"polish":   true,
+			"saveOrUpdateDB": true,
+			"revise":         true,
 		},
 	))
 
-	graph.AddBranch("updateDB", compose.NewGraphBranch(
-		routeAfterUpdate,
+	graph.AddBranch("saveOrUpdateDB", compose.NewGraphBranch(
+		routeAfterSaveOrUpdate,
 		map[string]bool{
-			"updateDB":  true,
-			compose.END: true,
+			"saveOrUpdateDB": true,
+			compose.END:      true,
 		},
 	))
 
@@ -101,6 +105,10 @@ func ExecutePlotlineRevisionWorkflow(ctx context.Context, graph compose.Runnable
 	fmt.Printf("最终状态: %s\n", result.CurrentNode)
 	if result.NovelID != 0 {
 		fmt.Printf("小说ID: %d\n", result.NovelID)
+	}
+	if len(result.SavedPlotlineIDs) > 0 {
+		fmt.Printf("保存的剧情线数量: %d\n", len(result.SavedPlotlineIDs))
+		fmt.Printf("剧情线ID列表: %v\n", result.SavedPlotlineIDs)
 	}
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
