@@ -119,9 +119,3 @@ type PlotlineRevisionWorkflowInput struct {
 	// UserSuggestion 用户的修改建议（必填）
 	UserSuggestion string
 }
-
-// Repository 数据仓库接口（简化版）
-type Repository interface {
-	CheckDuplicateByAuthorAndTitle(author, title string) (bool, error)
-	Create(novel interface{}) error
-}

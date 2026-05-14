@@ -6,8 +6,8 @@ import (
 
 	"waku/internal/plotline/repository"
 
-	"github.com/cloudwego/eino/compose"
 	einoModel "github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/compose"
 	"gorm.io/gorm"
 )
 
@@ -16,10 +16,10 @@ import (
 // 功能：从小说大纲中提取剧情线，并进行润色，最后保存到数据库
 //
 // 工作流程：
-//   1. init - 初始化工作流状态
-//   2. extract - 从大纲提取剧情线
-//   3. polish - 润色剧情线
-//   4. saveToDB - 保存到数据库（需要用户审批）
+//  1. init - 初始化工作流状态
+//  2. extract - 从大纲提取剧情线
+//  3. polish - 润色剧情线
+//  4. saveToDB - 保存到数据库（需要用户审批）
 //
 // 参数：
 //   - ctx: 上下文
@@ -27,68 +27,104 @@ import (
 //   - db: 数据库实例
 //
 // 返回值：
-//   - *compose.Graph[*PlotlineExtractWorkflowInput, *PlotlineExtractWorkflowState]: 工作流图
+//   - compose.Runnable[*PlotlineExtractWorkflowInput, *PlotlineExtractWorkflowState]: 可执行的工作流
 //   - error: 创建失败时返回错误
 func NewPlotlineExtractWorkflow(
 	ctx context.Context,
 	chatModel einoModel.BaseChatModel,
 	db *gorm.DB,
-) (*compose.Graph[*PlotlineExtractWorkflowInput, *PlotlineExtractWorkflowState], error) {
+) (compose.Runnable[*PlotlineExtractWorkflowInput, *PlotlineExtractWorkflowState], error) {
 	// 创建数据仓库
 	repo := repository.NewRepository(db)
 
 	// 创建工作流图
-	workflow := compose.NewGraph[*PlotlineExtractWorkflowInput, *PlotlineExtractWorkflowState]()
+	graph := compose.NewGraph[*PlotlineExtractWorkflowInput, *PlotlineExtractWorkflowState]()
 
 	// 添加节点
-	if err := workflow.AddNode("init", compose.InvokableLambda(initExtractNode)); err != nil {
-		return nil, fmt.Errorf("添加 init 节点失败: %w", err)
-	}
-
-	if err := workflow.AddNode("extract", compose.InvokableLambda(extractNode(ctx, chatModel))); err != nil {
-		return nil, fmt.Errorf("添加 extract 节点失败: %w", err)
-	}
-
-	if err := workflow.AddNode("polish", compose.InvokableLambda(polishNode(ctx, chatModel))); err != nil {
-		return nil, fmt.Errorf("添加 polish 节点失败: %w", err)
-	}
-
-	if err := workflow.AddNode("saveToDB", compose.InvokableLambda(saveToDBNode(db, repo))); err != nil {
-		return nil, fmt.Errorf("添加 saveToDB 节点失败: %w", err)
-	}
+	graph.AddLambdaNode("init", compose.InvokableLambda(initExtractNode))
+	graph.AddLambdaNode("extract", compose.InvokableLambda(extractNode(ctx, chatModel)))
+	graph.AddLambdaNode("polish", compose.InvokableLambda(polishNode(ctx, chatModel)))
+	graph.AddLambdaNode("saveToDB", compose.InvokableLambda(saveToDBNode(db, repo)))
 
 	// 添加边（定义节点之间的连接）
-	if err := workflow.AddEdge(compose.START, "init"); err != nil {
-		return nil, fmt.Errorf("添加 START -> init 边失败: %w", err)
-	}
-
-	if err := workflow.AddEdge("init", "extract"); err != nil {
-		return nil, fmt.Errorf("添加 init -> extract 边失败: %w", err)
-	}
+	graph.AddEdge(compose.START, "init")
+	graph.AddEdge("init", "extract")
 
 	// 添加条件边（根据状态决定下一步）
-	if err := workflow.AddConditionalEdges("extract", routeAfterExtract, map[string]string{
-		"polish":  "polish",
-		"extract": "extract",
-	}); err != nil {
-		return nil, fmt.Errorf("添加 extract 条件边失败: %w", err)
+	graph.AddBranch("extract", compose.NewGraphBranch(
+		routeAfterExtract,
+		map[string]bool{
+			"polish":  true,
+			"extract": true,
+		},
+	))
+
+	graph.AddBranch("polish", compose.NewGraphBranch(
+		routeAfterPolish,
+		map[string]bool{
+			"saveToDB": true,
+			"polish":   true,
+		},
+	))
+
+	graph.AddBranch("saveToDB", compose.NewGraphBranch(
+		routeAfterSave,
+		map[string]bool{
+			"saveToDB":  true,
+			compose.END: true,
+		},
+	))
+
+	// 编译工作流，设置最大步数以支持重试
+	return graph.Compile(ctx, compose.WithMaxRunSteps(50))
+}
+
+// ExecutePlotlineExtractWorkflow 执行剧情线提取工作流
+//
+// 参数：
+//   - ctx: 上下文
+//   - graph: 工作流 Graph
+//   - input: 输入参数
+//
+// 返回值：
+//   - *PlotlineExtractWorkflowState: 最终状态
+//   - error: 执行失败时返回错误
+func ExecutePlotlineExtractWorkflow(ctx context.Context, graph compose.Runnable[*PlotlineExtractWorkflowInput, *PlotlineExtractWorkflowState], input *PlotlineExtractWorkflowInput) (*PlotlineExtractWorkflowState, error) {
+	if input.Author == "" {
+		return nil, fmt.Errorf("作者名称不能为空")
+	}
+	if input.NovelName == "" {
+		return nil, fmt.Errorf("小说名称不能为空")
+	}
+	if input.Genre == "" {
+		return nil, fmt.Errorf("小说类型不能为空")
+	}
+	if input.Outline == "" {
+		return nil, fmt.Errorf("小说大纲不能为空")
 	}
 
-	if err := workflow.AddConditionalEdges("polish", routeAfterPolish, map[string]string{
-		"saveToDB": "saveToDB",
-		"polish":   "polish",
-	}); err != nil {
-		return nil, fmt.Errorf("添加 polish 条件边失败: %w", err)
+	fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Printf("📖 开始执行剧情线提取工作流\n")
+	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Printf("小说名称: %s\n", input.NovelName)
+	fmt.Printf("作者: %s\n", input.Author)
+	fmt.Printf("小说类型: %s\n", input.Genre)
+	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+
+	// 执行 Graph
+	result, err := graph.Invoke(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("工作流执行失败: %w", err)
 	}
 
-	if err := workflow.AddConditionalEdges("saveToDB", routeAfterSave, map[string]string{}); err != nil {
-		return nil, fmt.Errorf("添加 saveToDB 条件边失败: %w", err)
+	fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Printf("✅ 工作流执行完成\n")
+	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Printf("最终状态: %s\n", result.CurrentNode)
+	if result.SavedNovelID != 0 {
+		fmt.Printf("小说ID: %d\n", result.SavedNovelID)
 	}
+	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
-	// 编译工作流
-	if err := workflow.Compile(ctx); err != nil {
-		return nil, fmt.Errorf("编译工作流失败: %w", err)
-	}
-
-	return workflow, nil
+	return result, nil
 }

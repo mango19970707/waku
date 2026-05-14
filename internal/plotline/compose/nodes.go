@@ -9,6 +9,7 @@ import (
 
 	"waku/internal/constant"
 	"waku/internal/model"
+	"waku/internal/plotline/repository"
 	"waku/internal/utils"
 
 	einoModel "github.com/cloudwego/eino/components/model"
@@ -194,7 +195,7 @@ func getUserApproval(state *PlotlineExtractWorkflowState) (bool, string) {
 }
 
 // saveToDBNode 保存到数据库节点
-func saveToDBNode(db *gorm.DB, repo Repository) func(context.Context, *PlotlineExtractWorkflowState) (*PlotlineExtractWorkflowState, error) {
+func saveToDBNode(db *gorm.DB, repo repository.Repository) func(context.Context, *PlotlineExtractWorkflowState) (*PlotlineExtractWorkflowState, error) {
 	return func(ctx context.Context, state *PlotlineExtractWorkflowState) (*PlotlineExtractWorkflowState, error) {
 		fmt.Printf("\n🤖 [保存] 准备保存到数据库...\n")
 
