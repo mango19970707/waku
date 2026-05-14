@@ -48,7 +48,7 @@ func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(c
 
 		// 尝试从文件加载（断点续传，仅在有 NovelID 时）
 		if state.NovelID > 0 {
-			existingContent, err := utils.LoadFromFile(state.Author, state.NovelID, state.NovelName, constant.FileTypeOutline, constant.StageGenerate)
+			existingContent, err := utils.LoadFromFile(state.Author, constant.FileTypeOutline, constant.StageGenerate)
 			if err != nil {
 				state.ErrorMsg = fmt.Sprintf("加载已有内容失败: %v", err)
 				state.CurrentNode = "generate_failed"
@@ -73,6 +73,15 @@ func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(c
 		// 保存结果到状态（不立即写文件）
 		state.GeneratedOutline = result
 
+		// 保存生成阶段
+		if state.GeneratedOutline != "" {
+			if err := utils.SaveToFile(state.Author, constant.FileTypeOutline, constant.StageGenerate, state.GeneratedOutline); err != nil {
+				fmt.Printf("  ⚠️  保存生成阶段文件失败: %v\n", err)
+			} else {
+				fmt.Printf("  ✓ 生成阶段文档已保存\n")
+			}
+		}
+
 		fmt.Printf("  ✓ 大纲生成完成\n")
 		state.CurrentNode = "generate_success"
 		state.RetryCount = 0
@@ -94,7 +103,7 @@ func expandNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 
 		// 尝试从文件加载（断点续传，仅在有 NovelID 时）
 		if state.NovelID > 0 {
-			existingContent, err := utils.LoadFromFile(state.Author, state.NovelID, state.NovelName, constant.FileTypeOutline, constant.StageExpand)
+			existingContent, err := utils.LoadFromFile(state.Author, constant.FileTypeOutline, constant.StageExpand)
 			if err != nil {
 				state.ErrorMsg = fmt.Sprintf("加载已有内容失败: %v", err)
 				state.CurrentNode = "expand_failed"
@@ -119,6 +128,15 @@ func expandNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 		// 保存结果到状态（不立即写文件）
 		state.ExpandedOutline = result
 
+		// 保存扩写阶段
+		if state.ExpandedOutline != "" {
+			if err := utils.SaveToFile(state.Author, constant.FileTypeOutline, constant.StageExpand, state.ExpandedOutline); err != nil {
+				fmt.Printf("  ⚠️  保存扩写阶段文件失败: %v\n", err)
+			} else {
+				fmt.Printf("  ✓ 扩写阶段文档已保存\n")
+			}
+		}
+
 		fmt.Printf("  ✓ 大纲扩写完成\n")
 		state.CurrentNode = "expand_success"
 		state.RetryCount = 0
@@ -140,7 +158,7 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 
 		// 尝试从文件加载（断点续传，仅在有 NovelID 时）
 		if state.NovelID > 0 {
-			existingContent, err := utils.LoadFromFile(state.Author, state.NovelID, state.NovelName, constant.FileTypeOutline, constant.StagePolish)
+			existingContent, err := utils.LoadFromFile(state.Author, constant.FileTypeOutline, constant.StagePolish)
 			if err != nil {
 				state.ErrorMsg = fmt.Sprintf("加载已有内容失败: %v", err)
 				state.CurrentNode = "polish_failed"
@@ -164,6 +182,15 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 
 		// 保存结果到状态（不立即写文件）
 		state.PolishedOutline = result
+
+		// 保存润色阶段
+		if state.PolishedOutline != "" {
+			if err := utils.SaveToFile(state.Author, constant.FileTypeOutline, constant.StagePolish, state.PolishedOutline); err != nil {
+				fmt.Printf("  ⚠️  保存润色阶段文件失败: %v\n", err)
+			} else {
+				fmt.Printf("  ✓ 润色阶段文档已保存\n")
+			}
+		}
 
 		fmt.Printf("  ✓ 大纲润色完成\n")
 		state.CurrentNode = "polish_success"
@@ -278,29 +305,6 @@ func saveToDBNode(db *gorm.DB, repo tools.Repository) func(context.Context, *Out
 			return state, nil
 		}
 
-		// 中断恢复逻辑：首次调用时触发中断，等待用户审批
-		if !state.WaitingForApproval {
-			// 首次调用：触发中断，等待用户审批
-			state.WaitingForApproval = true
-			state.CurrentNode = "save_waiting_approval"
-
-			// 获取用户审批
-			approved, reason := getUserApproval(state)
-			state.UserApproved = approved
-			state.DisapproveReason = reason
-
-			// 如果用户拒绝，直接返回失败
-			if !approved {
-				state.ErrorMsg = fmt.Sprintf("用户拒绝保存: %s", reason)
-				state.CurrentNode = "save_rejected"
-				state.WaitingForApproval = false
-				return state, nil
-			}
-
-			// 用户批准，继续执行保存逻辑
-			state.WaitingForApproval = false
-		}
-
 		// 执行保存操作
 		fmt.Printf("\n🤖 [保存] 开始保存到数据库...\n")
 
@@ -339,6 +343,21 @@ func saveToDBNode(db *gorm.DB, repo tools.Repository) func(context.Context, *Out
 			// 新增小说
 			fmt.Printf("  → 创建新小说\n")
 
+			// 检查作者是否已有同名小说
+			isDuplicate, err := repo.CheckDuplicateByAuthorAndTitle(state.Author, state.ExtractedInfo.NovelTitle)
+			if err != nil {
+				state.ErrorMsg = fmt.Sprintf("检查重名失败: %v", err)
+				state.CurrentNode = "save_failed"
+				return state, nil
+			}
+
+			if isDuplicate {
+				state.ErrorMsg = fmt.Sprintf("作者 %s 已有同名小说《%s》，请修改小说名称后重试", state.Author, state.ExtractedInfo.NovelTitle)
+				state.CurrentNode = "save_failed"
+				fmt.Printf("  ❌ %s\n", state.ErrorMsg)
+				return state, nil
+			}
+
 			novel := &model.Novel{
 				Title:             state.ExtractedInfo.NovelTitle,
 				Author:            state.Author,
@@ -361,38 +380,6 @@ func saveToDBNode(db *gorm.DB, repo tools.Repository) func(context.Context, *Out
 			state.NovelID = novel.ID // 更新状态中的 NovelID
 			fmt.Printf("  ✓ 保存成功，小说ID: %d\n", state.SavedNovelID)
 		}
-
-		// 保存到数据库成功后，一次性保存所有阶段的 md 文档
-		fmt.Printf("\n🤖 [保存] 开始保存所有阶段的文档到文件...\n")
-
-		// 保存生成阶段
-		if state.GeneratedOutline != "" {
-			if err := utils.SaveToFile(state.Author, state.NovelID, state.NovelName, constant.FileTypeOutline, constant.StageGenerate, state.GeneratedOutline); err != nil {
-				fmt.Printf("  ⚠️  保存生成阶段文件失败: %v\n", err)
-			} else {
-				fmt.Printf("  ✓ 生成阶段文档已保存\n")
-			}
-		}
-
-		// 保存扩写阶段
-		if state.ExpandedOutline != "" {
-			if err := utils.SaveToFile(state.Author, state.NovelID, state.NovelName, constant.FileTypeOutline, constant.StageExpand, state.ExpandedOutline); err != nil {
-				fmt.Printf("  ⚠️  保存扩写阶段文件失败: %v\n", err)
-			} else {
-				fmt.Printf("  ✓ 扩写阶段文档已保存\n")
-			}
-		}
-
-		// 保存润色阶段
-		if state.PolishedOutline != "" {
-			if err := utils.SaveToFile(state.Author, state.NovelID, state.NovelName, constant.FileTypeOutline, constant.StagePolish, state.PolishedOutline); err != nil {
-				fmt.Printf("  ⚠️  保存润色阶段文件失败: %v\n", err)
-			} else {
-				fmt.Printf("  ✓ 润色阶段文档已保存\n")
-			}
-		}
-
-		fmt.Printf("  ✓ 所有阶段文档保存完成\n")
 
 		state.CurrentNode = "save_success"
 		state.RetryCount = 0
@@ -451,7 +438,7 @@ func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 		state.RevisedOutline = result
 
 		// 保存到文件
-		if err := utils.SaveToFile(state.Author, state.NovelID, state.NovelName, constant.FileTypeOutline, constant.StageRevise, result); err != nil {
+		if err := utils.SaveToFile(state.Author, constant.FileTypeOutline, constant.StageRevise, result); err != nil {
 			state.ErrorMsg = fmt.Sprintf("保存文件失败: %v", err)
 			state.CurrentNode = "revise_failed"
 			return state, nil

@@ -52,7 +52,7 @@ func partitionVolumesNode(ctx context.Context, chatModel einoModel.BaseChatModel
 			// 需要获取作者信息，从数据库查询
 			var novel model.Novel
 			if err := db.First(&novel, state.NovelID).Error; err == nil {
-				existingContent, err := utils.LoadFromFile(novel.Author, state.NovelID, state.NovelName, constant.FileTypeVolume, constant.StagePartition)
+				existingContent, err := utils.LoadFromFile(novel.Author, constant.FileTypeVolume, constant.StagePartition)
 				if err != nil {
 					state.ErrorMsg = fmt.Sprintf("加载已有内容失败: %v", err)
 					state.CurrentNode = "partition_failed"
@@ -86,7 +86,7 @@ func partitionVolumesNode(ctx context.Context, chatModel einoModel.BaseChatModel
 			return state, nil
 		}
 
-		if err := utils.SaveToFile(novel.Author, state.NovelID, state.NovelName, constant.FileTypeVolume, constant.StagePartition, result); err != nil {
+		if err := utils.SaveToFile(novel.Author, constant.FileTypeVolume, constant.StagePartition, result); err != nil {
 			state.ErrorMsg = fmt.Sprintf("保存文件失败: %v", err)
 			state.CurrentNode = "partition_failed"
 			return state, nil
@@ -243,7 +243,7 @@ func partitionChaptersNode(ctx context.Context, chatModel einoModel.BaseChatMode
 
 			// 尝试从文件加载（断点续传）
 			stageName := constant.FormatChapterStage(volumeNumber)
-			existingContent, err := utils.LoadFromFile(novel.Author, state.NovelID, state.NovelName, constant.FileTypeVolume, stageName)
+			existingContent, err := utils.LoadFromFile(novel.Author, constant.FileTypeVolume, stageName)
 			if err != nil {
 				state.ErrorMsg = fmt.Sprintf("加载第 %d 卷章节失败: %v", volumeNumber, err)
 				state.CurrentNode = "partition_chapters_failed"
@@ -266,7 +266,7 @@ func partitionChaptersNode(ctx context.Context, chatModel einoModel.BaseChatMode
 				chapterText = result
 
 				// 保存到文件
-				if err := utils.SaveToFile(novel.Author, state.NovelID, state.NovelName, constant.FileTypeVolume, stageName, result); err != nil {
+				if err := utils.SaveToFile(novel.Author, constant.FileTypeVolume, stageName, result); err != nil {
 					state.ErrorMsg = fmt.Sprintf("保存第 %d 卷章节失败: %v", volumeNumber, err)
 					state.CurrentNode = "partition_chapters_failed"
 					return state, nil

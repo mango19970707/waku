@@ -6,6 +6,8 @@ import "fmt"
 const (
 	// FileTypeOutline 大纲文件类型
 	FileTypeOutline = "outline"
+	// FileTypePlotline 剧情线文件类型
+	FileTypePlotline = "plotline"
 	// FileTypeVolume 分卷文件类型
 	FileTypeVolume = "volume"
 	// FileTypeChapter 章节文件类型
@@ -22,6 +24,8 @@ const (
 	StagePolish = "润色"
 	// StageRevise 修改阶段
 	StageRevise = "修改"
+	// StageExtract 提取阶段（用于剧情线提取）
+	StageExtract = "提取"
 )
 
 // 分卷处理阶段常量

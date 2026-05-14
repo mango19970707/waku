@@ -45,6 +45,9 @@ type Repository interface {
 
 	// Search 搜索小说（按标题或作者）
 	Search(keyword string, offset, limit int) ([]*model.Novel, error)
+
+	// CheckDuplicateByAuthorAndTitle 检查作者是否已有同名小说
+	CheckDuplicateByAuthorAndTitle(author, title string) (bool, error)
 }
 
 // repository Novel 数据仓库实现
@@ -362,4 +365,25 @@ func (r *repository) Search(keyword string, offset, limit int) ([]*model.Novel, 
 	}
 
 	return novels, nil
+}
+
+// CheckDuplicateByAuthorAndTitle 检查作者是否已有同名小说
+//
+// 参数：
+//   - author: 作者名称
+//   - title: 小说标题
+//
+// 返回值：
+//   - bool: true 表示存在重名，false 表示不存在
+//   - error: 查询失败时返回错误
+func (r *repository) CheckDuplicateByAuthorAndTitle(author, title string) (bool, error) {
+	var count int64
+
+	if err := r.db.Model(&model.Novel{}).
+		Where("author = ? AND title = ?", author, title).
+		Count(&count).Error; err != nil {
+		return false, fmt.Errorf("检查重名失败: %w", err)
+	}
+
+	return count > 0, nil
 }

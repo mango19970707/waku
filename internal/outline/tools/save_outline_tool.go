@@ -19,6 +19,7 @@ type SaveOutlineTool struct {
 // Repository 小说仓储接口
 type Repository interface {
 	Create(novel *model.Novel) error
+	CheckDuplicateByAuthorAndTitle(author, title string) (bool, error)
 }
 
 // SaveOutlineToolInput 保存大纲工具的输入参数

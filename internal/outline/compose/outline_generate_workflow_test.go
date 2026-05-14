@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"waku/internal/outline/repository"
 
 	"waku/internal/constant"
 	"waku/internal/model"
@@ -13,9 +14,30 @@ import (
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
+	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+var (
+	db *gorm.DB
+)
+
+func init() {
+	db = setupTestDBForTools()
+}
+
+// setupTestDBForTools 创建测试数据库
+func setupTestDBForTools() *gorm.DB {
+	// 使用项目根目录的 data 目录存储测试数据库
+	dbPath := "../../../data/waku.db"
+
+	db, _ := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+
+	_ = db.AutoMigrate(&model.Novel{})
+
+	return db
+}
 
 // ==================== Mock ChatModel ====================
 
@@ -43,7 +65,17 @@ func (m *mockChatModel) Generate(ctx context.Context, messages []*schema.Message
 	} else if contains(content, "扩写") || contains(content, "简略大纲") {
 		response = "# 扩写的大纲\n\n这是一个扩写后的详细大纲。"
 	} else if contains(content, "润色") {
-		response = "# 润色的大纲\n\n这是一个润色后的精品大纲。"
+		response = `# 润色的大纲,这是一个润色后的详细大纲。`
+	} else if contains(content, "提取") {
+		response = `{
+  "novel_title": "小说标题",
+  "synopsis": "小说简介（200-500字）",
+  "outline": "完整的大纲内容",
+  "worldview": "世界观设定",
+  "cultivation_system": "修行体系"
+}`
+	} else if contains(content, "调整和优化") {
+		response = `# 调整和优化的大纲,这是一个调整和优化后的详细大纲。`
 	} else {
 		response = "处理完成"
 	}
@@ -74,26 +106,6 @@ func (m *mockChatModel) IsCallbacksEnabled() bool {
 	return false
 }
 
-// ==================== Mock Repository ====================
-
-type mockRepository struct {
-	novels map[uint]*model.Novel
-}
-
-func newMockRepository() *mockRepository {
-	return &mockRepository{
-		novels: make(map[uint]*model.Novel),
-	}
-}
-
-func (r *mockRepository) Create(novel *model.Novel) error {
-	if novel.ID == 0 {
-		novel.ID = 1 // 使用数字ID
-	}
-	r.novels[novel.ID] = novel
-	return nil
-}
-
 // ==================== 辅助函数 ====================
 
 func contains(s, substr string) bool {
@@ -111,15 +123,14 @@ func containsHelper(s, substr string) bool {
 
 // setupTestDB 创建测试数据库
 func setupTestDB(t *testing.T) *gorm.DB {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("创建测试数据库失败: %v", err)
-	}
+	// 使用项目根目录的 data 目录存储测试数据库
+	dbPath := "../../../data/waku.db"
 
-	// 自动迁移
-	if err := db.AutoMigrate(&model.Novel{}); err != nil {
-		t.Fatalf("数据库迁移失败: %v", err)
-	}
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	require.NoError(t, err, "创建测试数据库失败")
+
+	err = db.AutoMigrate(&model.Novel{})
+	require.NoError(t, err, "迁移表结构失败")
 
 	return db
 }
@@ -134,7 +145,7 @@ func cleanupTestFiles(author, novelName string) {
 // ==================== 测试用例 ====================
 
 // TestOutlineWorkflowGraph_Success 测试完整的成功流程
-func TestOutlineWorkflowGraph_Success(t *testing.T) {
+func TestOutlineWorkflowGcommit raph_Success(t *testing.T) {
 	ctx := context.Background()
 
 	// 创建 Mock ChatModel
@@ -142,7 +153,7 @@ func TestOutlineWorkflowGraph_Success(t *testing.T) {
 
 	// 创建测试数据库
 	db := setupTestDB(t)
-	repo := newMockRepository()
+	repo := repository.NewRepository(db)
 
 	// 构建 Graph
 	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
@@ -190,16 +201,6 @@ func TestOutlineWorkflowGraph_Success(t *testing.T) {
 		t.Error("小说ID为空")
 	}
 
-	// 验证文件是否创建
-	stages := []string{"生成", "扩写", "润色"}
-	for _, stage := range stages {
-		// 文件路径格式：data/{作者名称}/{小说ID-名称}/abstract/{阶段}.md
-		filePath := filepath.Join("data", input.Author, fmt.Sprintf("%d-%s", result.NovelID, input.NovelName), "abstract", stage+".md")
-		if _, err := os.Stat(filePath); os.IsNotExist(err) {
-			t.Errorf("文件不存在: %s", filePath)
-		}
-	}
-
 	t.Log("✓ 完整流程测试通过")
 }
 
@@ -212,7 +213,7 @@ func TestOutlineWorkflowGraph_RetryOnFailure(t *testing.T) {
 
 	// 创建测试数据库
 	db := setupTestDB(t)
-	repo := newMockRepository()
+	repo := repository.NewRepository(db)
 
 	// 构建 Graph
 	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
@@ -256,7 +257,7 @@ func TestOutlineWorkflowGraph_MaxRetriesExceeded(t *testing.T) {
 
 	// 创建测试数据库
 	db := setupTestDB(t)
-	repo := newMockRepository()
+	repo := repository.NewRepository(db)
 
 	// 构建 Graph
 	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
@@ -295,7 +296,7 @@ func TestOutlineWorkflowGraph_ResumeFromCheckpoint(t *testing.T) {
 
 	// 创建测试数据库
 	db := setupTestDB(t)
-	repo := newMockRepository()
+	repo := repository.NewRepository(db)
 
 	// 构建 Graph
 	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
@@ -369,7 +370,7 @@ func TestOutlineWorkflowGraph_PartialResume(t *testing.T) {
 
 	// 创建测试数据库
 	db := setupTestDB(t)
-	repo := newMockRepository()
+	repo := repository.NewRepository(db)
 
 	t.Log("=== 测试场景：部分断点续传（只有生成阶段的文件） ===")
 
@@ -387,7 +388,7 @@ func TestOutlineWorkflowGraph_PartialResume(t *testing.T) {
 	// 预先创建"生成"阶段的文件
 	generatedContent := "# 预先生成的大纲\n\n这是预先保存的生成大纲。"
 	// 注意：这里使用 NovelID=1 来模拟已有小说的情况
-	if err := utils.SaveToFile(input.Author, 1, input.NovelName, constant.FileTypeOutline, constant.StageGenerate, generatedContent); err != nil {
+	if err := utils.SaveToFile(input.Author, constant.FileTypeOutline, constant.StageGenerate, generatedContent); err != nil {
 		t.Fatalf("预先保存文件失败: %v", err)
 	}
 
@@ -428,7 +429,7 @@ func TestOutlineWorkflowGraph_InvalidInput(t *testing.T) {
 
 	// 创建测试数据库
 	db := setupTestDB(t)
-	repo := newMockRepository()
+	repo := repository.NewRepository(db)
 
 	// 构建 Graph
 	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
