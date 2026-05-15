@@ -76,7 +76,10 @@ func (m *mockRevisionChatModel) Stream(ctx context.Context, input []*schema.Mess
 	if err != nil {
 		return nil, err
 	}
-	return schema.NewStreamReader(schema.StreamReaderFromArray([]*schema.Message{msg})), nil
+	r, w := schema.Pipe[*schema.Message](1)
+	_ = w.Send(msg, nil)
+	w.Close()
+	return r, nil
 }
 
 func (m *mockRevisionChatModel) BindTools(tools []*schema.ToolInfo) error {
@@ -109,34 +112,28 @@ func TestPlotlineRevisionWorkflowGraph(t *testing.T) {
 	// 先插入一些测试剧情线
 	testPlotlines := []*model.Plotline{
 		{
-			ID:           "6ece270a-9652-475a-a4ca-5974b820277c",
-			NovelID:      fmt.Sprintf("%d", testNovel.ID),
-			Title:        "主角修仙成神之路",
-			Type:         "main",
-			Description:  "主角从一个废柴少年开始，因意外获得神秘传承，踏上修仙之路。",
-			Status:       "active",
-			StartChapter: 1,
-			EndChapter:   0,
+			ID:          "6ece270a-9652-475a-a4ca-5974b820277c",
+			NovelID:     fmt.Sprintf("%d", testNovel.ID),
+			Title:       "主角修仙成神之路",
+			Type:        "main",
+			Description: "主角从一个废柴少年开始，因意外获得神秘传承，踏上修仙之路。",
+			Status:      "active",
 		},
 		{
-			ID:           "b3b33469-e8b5-4676-b944-47a0a694679e",
-			NovelID:      fmt.Sprintf("%d", testNovel.ID),
-			Title:        "与师姐的情感纠葛",
-			Type:         "sub",
-			Description:  "主角在宗门中与美丽的师姐相识相知，两人在历练中互生情愫。",
-			Status:       "active",
-			StartChapter: 10,
-			EndChapter:   80,
+			ID:          "b3b33469-e8b5-4676-b944-47a0a694679e",
+			NovelID:     fmt.Sprintf("%d", testNovel.ID),
+			Title:       "与师姐的情感纠葛",
+			Type:        "sub",
+			Description: "主角在宗门中与美丽的师姐相识相知，两人在历练中互生情愫。",
+			Status:      "active",
 		},
 		{
-			ID:           "1471788f-b3e4-49a5-a278-44552fd132e5",
-			NovelID:      fmt.Sprintf("%d", testNovel.ID),
-			Title:        "复仇灭杀仇家",
-			Type:         "sub",
-			Description:  "主角家族被仇家灭门，只有主角侥幸逃脱。主角隐忍修炼，实力大增后开始复仇计划。",
-			Status:       "active",
-			StartChapter: 5,
-			EndChapter:   60,
+			ID:          "1471788f-b3e4-49a5-a278-44552fd132e5",
+			NovelID:     fmt.Sprintf("%d", testNovel.ID),
+			Title:       "复仇灭杀仇家",
+			Type:        "sub",
+			Description: "主角家族被仇家灭门，只有主角侥幸逃脱。主角隐忍修炼，实力大增后开始复仇计划。",
+			Status:      "active",
 		},
 	}
 

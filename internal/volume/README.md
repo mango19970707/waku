@@ -1,4 +1,18 @@
-START → init → partition → extract → saveVolumes → partitionChapters → END
-↓       ↓          ↓         ↓              ↓
-加载小说  分卷      提取信息   保存卷        为每卷分章
-(从DB)   (3重试)   (3重试)   (3重试+审批)  (3重试)
+## 1. 创建agents
+- 分卷agent
+- 分卷审核agent
+- 分卷优化agent
+- 划分章节agent
+- 章节审核agent
+- 章节优化agent
+
+## 2. 创建提示词
+
+## 3. 创建数仓
+
+## 4. 创建工作流
+输入：小说ID
+输出：卷的ID列表、每卷对应的章节范围
+
+## 5. 测试例
+只需要创建完整跑通工作流的测试例即可

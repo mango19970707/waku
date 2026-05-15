@@ -26,12 +26,6 @@ type Plotline struct {
 	// Status 剧情线状态（active-进行中、completed-已完结、paused-暂停）
 	Status string `gorm:"type:varchar(20);default:'active'" json:"status"`
 
-	// StartChapter 起始章节序号
-	StartChapter int `gorm:"default:0" json:"start_chapter"`
-
-	// EndChapter 结束章节序号（0 表示未结束）
-	EndChapter int `gorm:"default:0" json:"end_chapter"`
-
 	// CreatedAt 创建时间
 	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
 

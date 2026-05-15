@@ -184,11 +184,9 @@ func saveToDBNode(db *gorm.DB, plotlineRepo repository.PlotlineRepository) func(
 		// 解析 JSON 数据
 		var output struct {
 			Plotlines []struct {
-				Title        string `json:"title"`
-				Type         string `json:"type"`
-				Description  string `json:"description"`
-				StartChapter int    `json:"start_chapter"`
-				EndChapter   int    `json:"end_chapter"`
+				Title       string `json:"title"`
+				Type        string `json:"type"`
+				Description string `json:"description"`
 			} `json:"plotlines"`
 		}
 
@@ -208,14 +206,12 @@ func saveToDBNode(db *gorm.DB, plotlineRepo repository.PlotlineRepository) func(
 		plotlines := make([]*model.Plotline, 0, len(output.Plotlines))
 		for _, item := range output.Plotlines {
 			plotline := &model.Plotline{
-				ID:           uuid.New().String(),
-				NovelID:      fmt.Sprintf("%d", state.NovelID),
-				Title:        item.Title,
-				Type:         item.Type,
-				Description:  item.Description,
-				Status:       "active",
-				StartChapter: item.StartChapter,
-				EndChapter:   item.EndChapter,
+				ID:          uuid.New().String(),
+				NovelID:     fmt.Sprintf("%d", state.NovelID),
+				Title:       item.Title,
+				Type:        item.Type,
+				Description: item.Description,
+				Status:      "active",
 			}
 			plotlines = append(plotlines, plotline)
 		}
@@ -272,23 +268,19 @@ func initRevisionNode(db *gorm.DB, plotlineRepo repository.PlotlineRepository) f
 
 		// 将剧情线转换为 JSON 格式
 		type PlotlineJSON struct {
-			ID           string `json:"id"`
-			Title        string `json:"title"`
-			Type         string `json:"type"`
-			Description  string `json:"description"`
-			StartChapter int    `json:"start_chapter"`
-			EndChapter   int    `json:"end_chapter"`
+			ID          string `json:"id"`
+			Title       string `json:"title"`
+			Type        string `json:"type"`
+			Description string `json:"description"`
 		}
 
 		plotlinesJSON := make([]PlotlineJSON, 0, len(plotlines))
 		for _, p := range plotlines {
 			plotlinesJSON = append(plotlinesJSON, PlotlineJSON{
-				ID:           p.ID,
-				Title:        p.Title,
-				Type:         p.Type,
-				Description:  p.Description,
-				StartChapter: p.StartChapter,
-				EndChapter:   p.EndChapter,
+				ID:          p.ID,
+				Title:       p.Title,
+				Type:        p.Type,
+				Description: p.Description,
 			})
 		}
 
@@ -425,12 +417,10 @@ func saveOrUpdateDBNode(db *gorm.DB, plotlineRepo repository.PlotlineRepository)
 		// 解析 JSON 数据
 		var output struct {
 			Plotlines []struct {
-				ID           string `json:"id"`
-				Title        string `json:"title"`
-				Type         string `json:"type"`
-				Description  string `json:"description"`
-				StartChapter int    `json:"start_chapter"`
-				EndChapter   int    `json:"end_chapter"`
+				ID          string `json:"id"`
+				Title       string `json:"title"`
+				Type        string `json:"type"`
+				Description string `json:"description"`
 			} `json:"plotlines"`
 		}
 
@@ -453,14 +443,12 @@ func saveOrUpdateDBNode(db *gorm.DB, plotlineRepo repository.PlotlineRepository)
 
 		for _, item := range output.Plotlines {
 			plotline := &model.Plotline{
-				ID:           item.ID,
-				NovelID:      fmt.Sprintf("%d", state.NovelID),
-				Title:        item.Title,
-				Type:         item.Type,
-				Description:  item.Description,
-				Status:       "active",
-				StartChapter: item.StartChapter,
-				EndChapter:   item.EndChapter,
+				ID:          item.ID,
+				NovelID:     fmt.Sprintf("%d", state.NovelID),
+				Title:       item.Title,
+				Type:        item.Type,
+				Description: item.Description,
+				Status:      "active",
 			}
 
 			if item.ID != "" {
