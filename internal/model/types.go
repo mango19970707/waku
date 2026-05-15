@@ -16,9 +16,14 @@ func (s *StringArray) Scan(value interface{}) error {
 		return nil
 	}
 
-	bytes, ok := value.([]byte)
-	if !ok {
-		return errors.New("类型断言失败：期望 []byte")
+	var bytes []byte
+	switch v := value.(type) {
+	case []byte:
+		bytes = v
+	case string:
+		bytes = []byte(v)
+	default:
+		return errors.New("类型断言失败：期望 []byte 或 string")
 	}
 
 	if len(bytes) == 0 {
@@ -35,4 +40,41 @@ func (s StringArray) Value() (driver.Value, error) {
 		return "[]", nil
 	}
 	return json.Marshal(s)
+}
+
+// RelationshipMap 角色关系映射类型，用于在数据库中存储 JSON 对象
+// 格式：{"角色ID": "和当前角色的关系描述"}
+type RelationshipMap map[string]string
+
+// Scan 实现 sql.Scanner 接口，从数据库读取数据
+func (r *RelationshipMap) Scan(value interface{}) error {
+	if value == nil {
+		*r = make(map[string]string)
+		return nil
+	}
+
+	var bytes []byte
+	switch v := value.(type) {
+	case []byte:
+		bytes = v
+	case string:
+		bytes = []byte(v)
+	default:
+		return errors.New("类型断言失败：期望 []byte 或 string")
+	}
+
+	if len(bytes) == 0 {
+		*r = make(map[string]string)
+		return nil
+	}
+
+	return json.Unmarshal(bytes, r)
+}
+
+// Value 实现 driver.Valuer 接口，向数据库写入数据
+func (r RelationshipMap) Value() (driver.Value, error) {
+	if len(r) == 0 {
+		return "{}", nil
+	}
+	return json.Marshal(r)
 }

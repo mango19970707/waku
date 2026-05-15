@@ -35,6 +35,12 @@ type Character struct {
 	// Background 背景故事
 	Background string `gorm:"type:text" json:"background"`
 
+	// PlotlineIDs 角色关联的剧情线ID列表
+	PlotlineIDs StringArray `gorm:"type:text" json:"plotline_ids"`
+
+	// Relationships 角色关系映射，格式：{"角色ID": "和当前角色的关系描述"}
+	Relationships RelationshipMap `gorm:"type:text" json:"relationships"`
+
 	// CreatedAt 创建时间
 	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
 
