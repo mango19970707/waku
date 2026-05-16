@@ -8,29 +8,33 @@ import (
 	"path/filepath"
 
 	einoModel "github.com/cloudwego/eino/components/model"
-	"gorm.io/gorm"
 
 	"waku/internal/character/agents"
 	"waku/internal/character/repository"
 	"waku/internal/model"
 )
 
+// NovelRepository Novel 仓储接口（用于查询小说信息）
+type NovelRepository interface {
+	GetByID(id uint) (*model.Novel, error)
+}
+
 // ==================== 人物提取工作流节点 ====================
 
 // initExtractNode 初始化提取工作流节点
 //
 // 参数：
-//   - db: 数据库连接
+//   - novelRepo: Novel 仓储接口
 //
 // 返回：
 //   - func: 节点处理函数
-func initExtractNode(db *gorm.DB) func(context.Context, *CharacterExtractWorkflowInput) (*CharacterExtractWorkflowState, error) {
+func initExtractNode(novelRepo NovelRepository) func(context.Context, *CharacterExtractWorkflowInput) (*CharacterExtractWorkflowState, error) {
 	return func(ctx context.Context, input *CharacterExtractWorkflowInput) (*CharacterExtractWorkflowState, error) {
 		fmt.Println("\n========== 初始化人物提取工作流 ==========")
 
 		// 查询小说信息
-		var novel model.Novel
-		if err := db.First(&novel, input.NovelID).Error; err != nil {
+		novel, err := novelRepo.GetByID(input.NovelID)
+		if err != nil {
 			return nil, fmt.Errorf("查询小说失败: %w", err)
 		}
 
@@ -124,12 +128,11 @@ func extractNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(co
 // saveToDBNode 保存到数据库节点
 //
 // 参数：
-//   - db: 数据库连接
 //   - characterRepo: 人物仓储
 //
 // 返回：
 //   - func: 节点处理函数
-func saveToDBNode(db *gorm.DB, characterRepo repository.CharacterRepository) func(context.Context, *CharacterExtractWorkflowState) (*CharacterExtractWorkflowState, error) {
+func saveToDBNode(characterRepo repository.CharacterRepository) func(context.Context, *CharacterExtractWorkflowState) (*CharacterExtractWorkflowState, error) {
 	return func(ctx context.Context, state *CharacterExtractWorkflowState) (*CharacterExtractWorkflowState, error) {
 		fmt.Println("\n========== 保存人物到数据库 ==========")
 
@@ -183,24 +186,23 @@ func saveToDBNode(db *gorm.DB, characterRepo repository.CharacterRepository) fun
 // initRevisionNode 初始化修改工作流节点
 //
 // 参数：
-//   - db: 数据库连接
+//   - novelRepo: Novel 仓储接口
 //   - characterRepo: 人物仓储
 //
 // 返回：
 //   - func: 节点处理函数
-func initRevisionNode(db *gorm.DB, characterRepo repository.CharacterRepository) func(context.Context, *CharacterRevisionWorkflowInput) (*CharacterRevisionWorkflowState, error) {
+func initRevisionNode(novelRepo NovelRepository, characterRepo repository.CharacterRepository) func(context.Context, *CharacterRevisionWorkflowInput) (*CharacterRevisionWorkflowState, error) {
 	return func(ctx context.Context, input *CharacterRevisionWorkflowInput) (*CharacterRevisionWorkflowState, error) {
 		fmt.Println("\n========== 初始化人物修改工作流 ==========")
 
 		// 查询小说信息
-		var novel model.Novel
-		if err := db.First(&novel, input.NovelID).Error; err != nil {
+		novel, err := novelRepo.GetByID(input.NovelID)
+		if err != nil {
 			return nil, fmt.Errorf("查询小说失败: %w", err)
 		}
 
 		// 查询该小说的人物
 		var characters []*model.Character
-		var err error
 
 		if input.CharacterID != "" {
 			// 如果指定了角色ID，只查询该角色
@@ -393,12 +395,11 @@ func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 // saveOrUpdateDBNode 保存或更新到数据库节点
 //
 // 参数：
-//   - db: 数据库连接
 //   - characterRepo: 人物仓储
 //
 // 返回：
 //   - func: 节点处理函数
-func saveOrUpdateDBNode(db *gorm.DB, characterRepo repository.CharacterRepository) func(context.Context, *CharacterRevisionWorkflowState) (*CharacterRevisionWorkflowState, error) {
+func saveOrUpdateDBNode(characterRepo repository.CharacterRepository) func(context.Context, *CharacterRevisionWorkflowState) (*CharacterRevisionWorkflowState, error) {
 	return func(ctx context.Context, state *CharacterRevisionWorkflowState) (*CharacterRevisionWorkflowState, error) {
 		fmt.Println("\n========== 保存/更新人物到数据库 ==========")
 

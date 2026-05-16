@@ -149,8 +149,11 @@ func TestPlotlineRevisionWorkflowGraph(t *testing.T) {
 		cleanupTestFiles(testNovel.Author, testNovel.Title)
 	}()
 
+	// 创建 repository
+	novelRepo := repository.NewRepository(db)
+
 	// 构建 Graph
-	graph, err := NewPlotlineRevisionWorkflow(ctx, chatModel, db, plotlineRepo)
+	graph, err := NewPlotlineRevisionWorkflow(ctx, chatModel, novelRepo, plotlineRepo)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}

@@ -15,19 +15,18 @@ import (
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 // ==================== 提取工作流节点 ====================
 
 // initExtractNode 初始化提取工作流节点（从数据库加载小说信息）
-func initExtractNode(db *gorm.DB) func(context.Context, *PlotlineExtractWorkflowInput) (*PlotlineExtractWorkflowState, error) {
+func initExtractNode(novelRepo repository.Repository) func(context.Context, *PlotlineExtractWorkflowInput) (*PlotlineExtractWorkflowState, error) {
 	return func(ctx context.Context, input *PlotlineExtractWorkflowInput) (*PlotlineExtractWorkflowState, error) {
 		fmt.Printf("\n🤖 [初始化] 从数据库加载小说信息...\n")
 
 		// 查询小说信息
-		var novel model.Novel
-		if err := db.First(&novel, input.NovelID).Error; err != nil {
+		novel, err := novelRepo.GetByID(input.NovelID)
+		if err != nil {
 			return nil, fmt.Errorf("查询小说失败: %w", err)
 		}
 
@@ -170,7 +169,7 @@ func getUserApproval(state *PlotlineExtractWorkflowState) (bool, string) {
 }
 
 // saveToDBNode 保存到数据库节点（批量插入多条剧情线）
-func saveToDBNode(db *gorm.DB, plotlineRepo repository.PlotlineRepository) func(context.Context, *PlotlineExtractWorkflowState) (*PlotlineExtractWorkflowState, error) {
+func saveToDBNode(plotlineRepo repository.PlotlineRepository) func(context.Context, *PlotlineExtractWorkflowState) (*PlotlineExtractWorkflowState, error) {
 	return func(ctx context.Context, state *PlotlineExtractWorkflowState) (*PlotlineExtractWorkflowState, error) {
 		fmt.Printf("\n🤖 [保存] 准备保存到数据库...\n")
 
@@ -241,13 +240,13 @@ func saveToDBNode(db *gorm.DB, plotlineRepo repository.PlotlineRepository) func(
 // ==================== 修改工作流节点 ====================
 
 // initRevisionNode 初始化修改工作流节点（从数据库加载小说信息和剧情线）
-func initRevisionNode(db *gorm.DB, plotlineRepo repository.PlotlineRepository) func(context.Context, *PlotlineRevisionWorkflowInput) (*PlotlineRevisionWorkflowState, error) {
+func initRevisionNode(novelRepo repository.Repository, plotlineRepo repository.PlotlineRepository) func(context.Context, *PlotlineRevisionWorkflowInput) (*PlotlineRevisionWorkflowState, error) {
 	return func(ctx context.Context, input *PlotlineRevisionWorkflowInput) (*PlotlineRevisionWorkflowState, error) {
 		fmt.Printf("\n🤖 [初始化] 从数据库加载小说信息和剧情线...\n")
 
 		// 查询小说信息
-		var novel model.Novel
-		if err := db.First(&novel, input.NovelID).Error; err != nil {
+		novel, err := novelRepo.GetByID(input.NovelID)
+		if err != nil {
 			return nil, fmt.Errorf("查询小说失败: %w", err)
 		}
 
@@ -403,7 +402,7 @@ func getUserApprovalForRevision(state *PlotlineRevisionWorkflowState) (bool, str
 }
 
 // saveOrUpdateDBNode 保存或更新数据库节点（修改工作流）
-func saveOrUpdateDBNode(db *gorm.DB, plotlineRepo repository.PlotlineRepository) func(context.Context, *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
+func saveOrUpdateDBNode(plotlineRepo repository.PlotlineRepository) func(context.Context, *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
 	return func(ctx context.Context, state *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
 		fmt.Printf("\n🤖 [保存] 准备保存或更新到数据库...\n")
 

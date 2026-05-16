@@ -8,7 +8,6 @@ import (
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"
-	"gorm.io/gorm"
 )
 
 // PlotlineExtractWorkflowInput 剧情线提取工作流的输入参数
@@ -103,7 +102,8 @@ type PlotlineRevisionWorkflowState struct {
 // 参数：
 //   - ctx: 上下文
 //   - chatModel: 聊天模型实例
-//   - db: 数据库实例
+//   - novelRepo: 小说仓库实例
+//   - plotlineRepo: 剧情线仓库实例
 //
 // 返回值：
 //   - compose.Runnable[*PlotlineExtractWorkflowInput, *PlotlineExtractWorkflowState]: 可执行的工作流
@@ -111,18 +111,17 @@ type PlotlineRevisionWorkflowState struct {
 func NewPlotlineExtractWorkflow(
 	ctx context.Context,
 	chatModel einoModel.BaseChatModel,
-	db *gorm.DB,
+	novelRepo repository.Repository,
+	plotlineRepo repository.PlotlineRepository,
 ) (compose.Runnable[*PlotlineExtractWorkflowInput, *PlotlineExtractWorkflowState], error) {
-	// 创建数据仓库
-	plotlineRepo := repository.NewPlotlineRepository(db)
 
 	// 创建工作流图
 	graph := compose.NewGraph[*PlotlineExtractWorkflowInput, *PlotlineExtractWorkflowState]()
 
 	// 添加节点
-	graph.AddLambdaNode("init", compose.InvokableLambda(initExtractNode(db)))
+	graph.AddLambdaNode("init", compose.InvokableLambda(initExtractNode(novelRepo)))
 	graph.AddLambdaNode("extract", compose.InvokableLambda(extractNode(ctx, chatModel)))
-	graph.AddLambdaNode("saveToDB", compose.InvokableLambda(saveToDBNode(db, plotlineRepo)))
+	graph.AddLambdaNode("saveToDB", compose.InvokableLambda(saveToDBNode(plotlineRepo)))
 
 	// 添加边（定义节点之间的连接）
 	graph.AddEdge(compose.START, "init")

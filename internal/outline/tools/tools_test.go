@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
+	_ "modernc.org/sqlite" // 使用纯 Go 的 SQLite 驱动（不需要 CGO）
 	"gorm.io/gorm"
 )
 
@@ -19,7 +20,10 @@ func SetupTestDBForTools(t *testing.T) *gorm.DB {
 	// 使用项目根目录的 data 目录存储测试数据库
 	dbPath := "../../data/waku.db"
 
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Dialector{
+		DriverName: "sqlite",
+		DSN:        dbPath,
+	}, &gorm.Config{})
 	require.NoError(t, err, "创建测试数据库失败")
 
 	err = db.AutoMigrate(&model.Novel{})

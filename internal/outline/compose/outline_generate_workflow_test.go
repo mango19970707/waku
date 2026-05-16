@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	_ "modernc.org/sqlite" // 使用纯 Go 的 SQLite 驱动（不需要 CGO）
 )
 
 var (
@@ -32,7 +33,10 @@ func setupTestDBForTools() *gorm.DB {
 	// 使用项目根目录的 data 目录存储测试数据库
 	dbPath := "../../../data/waku.db"
 
-	db, _ := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	db, _ := gorm.Open(sqlite.Dialector{
+		DriverName: "sqlite",
+		DSN:        dbPath,
+	}, &gorm.Config{})
 
 	_ = db.AutoMigrate(&model.Novel{})
 
@@ -126,7 +130,10 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	// 使用项目根目录的 data 目录存储测试数据库
 	dbPath := "../../../data/waku.db"
 
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Dialector{
+		DriverName: "sqlite",
+		DSN:        dbPath,
+	}, &gorm.Config{})
 	require.NoError(t, err, "创建测试数据库失败")
 
 	err = db.AutoMigrate(&model.Novel{})
@@ -156,7 +163,7 @@ func TestOutlineWorkflowGraph_Success(t *testing.T) {
 	repo := repository.NewRepository(db)
 
 	// 构建 Graph
-	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
+	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, repo)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}
@@ -216,7 +223,7 @@ func TestOutlineWorkflowGraph_RetryOnFailure(t *testing.T) {
 	repo := repository.NewRepository(db)
 
 	// 构建 Graph
-	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
+	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, repo)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}
@@ -260,7 +267,7 @@ func TestOutlineWorkflowGraph_MaxRetriesExceeded(t *testing.T) {
 	repo := repository.NewRepository(db)
 
 	// 构建 Graph
-	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
+	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, repo)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}
@@ -299,7 +306,7 @@ func TestOutlineWorkflowGraph_ResumeFromCheckpoint(t *testing.T) {
 	repo := repository.NewRepository(db)
 
 	// 构建 Graph
-	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
+	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, repo)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}
@@ -393,7 +400,7 @@ func TestOutlineWorkflowGraph_PartialResume(t *testing.T) {
 	}
 
 	// 构建 Graph
-	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
+	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, repo)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}
@@ -432,7 +439,7 @@ func TestOutlineWorkflowGraph_InvalidInput(t *testing.T) {
 	repo := repository.NewRepository(db)
 
 	// 构建 Graph
-	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, db, repo)
+	graph, err := BuildOutlineWorkflowGraph(ctx, chatModel, repo)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}

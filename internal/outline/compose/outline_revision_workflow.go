@@ -3,11 +3,10 @@ package compose
 import (
 	"context"
 	"fmt"
-	"waku/internal/outline/tools"
+	"waku/internal/outline/repository"
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"
-	"gorm.io/gorm"
 )
 
 // OutlineRevisionWorkflowState 大纲修改工作流状态
@@ -53,7 +52,6 @@ type OutlineRevisionWorkflowInput struct {
 // 参数：
 //   - ctx: 上下文
 //   - chatModel: 聊天模型实例
-//   - db: 数据库连接
 //   - repo: 小说仓储实现
 //
 // 返回值：
@@ -69,14 +67,14 @@ type OutlineRevisionWorkflowInput struct {
 // 特性：
 //   - 修改后的大纲保存到 data/content/{小说ID-名称}/abstract/修改.md
 //   - 工具调用失败自动重试3次
-func BuildOutlineRevisionWorkflowGraph(ctx context.Context, chatModel einoModel.BaseChatModel, db *gorm.DB, repo tools.Repository) (compose.Runnable[*OutlineRevisionWorkflowInput, *OutlineRevisionWorkflowState], error) {
+func BuildOutlineRevisionWorkflowGraph(ctx context.Context, chatModel einoModel.BaseChatModel, repo repository.Repository) (compose.Runnable[*OutlineRevisionWorkflowInput, *OutlineRevisionWorkflowState], error) {
 	graph := compose.NewGraph[*OutlineRevisionWorkflowInput, *OutlineRevisionWorkflowState]()
 
 	// 添加节点
-	graph.AddLambdaNode("init", compose.InvokableLambda(initRevisionNode(db)))
+	graph.AddLambdaNode("init", compose.InvokableLambda(initRevisionNode(repo)))
 	graph.AddLambdaNode("revise", compose.InvokableLambda(reviseNode(ctx, chatModel)))
 	graph.AddLambdaNode("extract", compose.InvokableLambda(extractRevisionNode(ctx, chatModel)))
-	graph.AddLambdaNode("update", compose.InvokableLambda(updateDBNode(db)))
+	graph.AddLambdaNode("update", compose.InvokableLambda(updateDBNode(repo)))
 
 	// 添加边
 	graph.AddEdge(compose.START, "init")

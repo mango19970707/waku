@@ -6,7 +6,6 @@ import (
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"
-	"gorm.io/gorm"
 
 	"waku/internal/character/repository"
 )
@@ -41,8 +40,8 @@ type CharacterRevisionWorkflowState struct {
 //
 // 参数：
 //   - ctx: 上下文对象
-//   - db: 数据库连接
 //   - chatModel: 聊天模型
+//   - novelRepo: Novel 仓储
 //   - characterRepo: 人物仓储
 //
 // 返回：
@@ -50,18 +49,18 @@ type CharacterRevisionWorkflowState struct {
 //   - error: 错误信息
 func NewCharacterRevisionWorkflow(
 	ctx context.Context,
-	db *gorm.DB,
 	chatModel einoModel.BaseChatModel,
+	novelRepo NovelRepository,
 	characterRepo repository.CharacterRepository,
 ) (compose.Runnable[*CharacterRevisionWorkflowInput, *CharacterRevisionWorkflowState], error) {
 	// 创建工作流图
 	graph := compose.NewGraph[*CharacterRevisionWorkflowInput, *CharacterRevisionWorkflowState]()
 
 	// 添加节点
-	graph.AddLambdaNode("init", compose.InvokableLambda(initRevisionNode(db, characterRepo)))
+	graph.AddLambdaNode("init", compose.InvokableLambda(initRevisionNode(novelRepo, characterRepo)))
 	graph.AddLambdaNode("review", compose.InvokableLambda(reviewNode(ctx, chatModel)))
 	graph.AddLambdaNode("revise", compose.InvokableLambda(reviseNode(ctx, chatModel)))
-	graph.AddLambdaNode("saveOrUpdateDB", compose.InvokableLambda(saveOrUpdateDBNode(db, characterRepo)))
+	graph.AddLambdaNode("saveOrUpdateDB", compose.InvokableLambda(saveOrUpdateDBNode(characterRepo)))
 
 	// 添加边
 	graph.AddEdge(compose.START, "init")

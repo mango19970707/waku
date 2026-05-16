@@ -14,6 +14,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
+	_ "modernc.org/sqlite" // 使用纯 Go 的 SQLite 驱动（不需要 CGO）
 	"gorm.io/gorm"
 )
 
@@ -108,7 +109,10 @@ func TestCharacterExtractWorkflowGraph(t *testing.T) {
 	ctx := context.Background()
 
 	// 创建内存数据库
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Dialector{
+		DriverName: "sqlite",
+		DSN:        ":memory:",
+	}, &gorm.Config{})
 	require.NoError(t, err, "创建数据库失败")
 
 	// 自动迁移
@@ -129,7 +133,8 @@ func TestCharacterExtractWorkflowGraph(t *testing.T) {
 	err = db.Create(testNovel).Error
 	require.NoError(t, err, "创建测试小说失败")
 
-	// 创建 CharacterRepository
+	// 创建 Repository
+	novelRepo := &mockNovelRepository{db: db}
 	characterRepo := repository.NewCharacterRepository(db)
 
 	// 清理测试数据
@@ -142,7 +147,7 @@ func TestCharacterExtractWorkflowGraph(t *testing.T) {
 	}()
 
 	// 构建 Graph
-	graph, err := NewCharacterExtractWorkflow(ctx, db, chatModel, characterRepo)
+	graph, err := NewCharacterExtractWorkflow(ctx, chatModel, novelRepo, characterRepo)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}
@@ -271,7 +276,10 @@ func TestCharacterExtractWorkflowNoOutline(t *testing.T) {
 	ctx := context.Background()
 
 	// 创建内存数据库
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Dialector{
+		DriverName: "sqlite",
+		DSN:        ":memory:",
+	}, &gorm.Config{})
 	require.NoError(t, err, "创建数据库失败")
 
 	// 自动迁移
@@ -292,7 +300,8 @@ func TestCharacterExtractWorkflowNoOutline(t *testing.T) {
 	err = db.Create(testNovel).Error
 	require.NoError(t, err, "创建测试小说失败")
 
-	// 创建 CharacterRepository
+	// 创建 Repository
+	novelRepo := &mockNovelRepository{db: db}
 	characterRepo := repository.NewCharacterRepository(db)
 
 	// 清理测试数据
@@ -302,7 +311,7 @@ func TestCharacterExtractWorkflowNoOutline(t *testing.T) {
 	}()
 
 	// 构建 Graph
-	graph, err := NewCharacterExtractWorkflow(ctx, db, chatModel, characterRepo)
+	graph, err := NewCharacterExtractWorkflow(ctx, chatModel, novelRepo, characterRepo)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}
@@ -322,3 +331,18 @@ func TestCharacterExtractWorkflowNoOutline(t *testing.T) {
 		t.Logf("✓ 正确处理了空大纲的情况: %v", err)
 	}
 }
+
+// ==================== Mock NovelRepository ====================
+
+type mockNovelRepository struct {
+	db *gorm.DB
+}
+
+func (m *mockNovelRepository) GetByID(id uint) (*model.Novel, error) {
+	var novel model.Novel
+	if err := m.db.First(&novel, id).Error; err != nil {
+		return nil, err
+	}
+	return &novel, nil
+}
+

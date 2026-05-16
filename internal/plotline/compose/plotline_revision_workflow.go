@@ -8,7 +8,6 @@ import (
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"
-	"gorm.io/gorm"
 )
 
 // NewPlotlineRevisionWorkflow 创建剧情线修改工作流
@@ -23,7 +22,7 @@ import (
 // 参数：
 //   - ctx: 上下文
 //   - chatModel: 聊天模型实例
-//   - db: 数据库实例
+//   - novelRepo: 小说仓库实例
 //   - plotlineRepo: 剧情线仓库实例
 //
 // 返回值：
@@ -32,16 +31,16 @@ import (
 func NewPlotlineRevisionWorkflow(
 	ctx context.Context,
 	chatModel einoModel.BaseChatModel,
-	db *gorm.DB,
+	novelRepo repository.Repository,
 	plotlineRepo repository.PlotlineRepository,
 ) (compose.Runnable[*PlotlineRevisionWorkflowInput, *PlotlineRevisionWorkflowState], error) {
 	// 创建工作流图
 	graph := compose.NewGraph[*PlotlineRevisionWorkflowInput, *PlotlineRevisionWorkflowState]()
 
 	// 添加节点
-	graph.AddLambdaNode("init", compose.InvokableLambda(initRevisionNode(db, plotlineRepo)))
+	graph.AddLambdaNode("init", compose.InvokableLambda(initRevisionNode(novelRepo, plotlineRepo)))
 	graph.AddLambdaNode("revise", compose.InvokableLambda(reviseNode(ctx, chatModel)))
-	graph.AddLambdaNode("saveOrUpdateDB", compose.InvokableLambda(saveOrUpdateDBNode(db, plotlineRepo)))
+	graph.AddLambdaNode("saveOrUpdateDB", compose.InvokableLambda(saveOrUpdateDBNode(plotlineRepo)))
 
 	// 添加边（定义节点之间的连接）
 	graph.AddEdge(compose.START, "init")

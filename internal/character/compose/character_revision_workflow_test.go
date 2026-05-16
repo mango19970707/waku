@@ -16,6 +16,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
+	_ "modernc.org/sqlite" // 使用纯 Go 的 SQLite 驱动（不需要 CGO）
 	"gorm.io/gorm"
 )
 
@@ -147,7 +148,10 @@ func TestCharacterRevisionWorkflowGraph(t *testing.T) {
 	ctx := context.Background()
 
 	// 创建内存数据库
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Dialector{
+		DriverName: "sqlite",
+		DSN:        ":memory:",
+	}, &gorm.Config{})
 	require.NoError(t, err, "创建数据库失败")
 
 	// 自动迁移
@@ -320,7 +324,10 @@ func TestCharacterRevisionWorkflowWithSpecificCharacter(t *testing.T) {
 	ctx := context.Background()
 
 	// 创建内存数据库
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Dialector{
+		DriverName: "sqlite",
+		DSN:        ":memory:",
+	}, &gorm.Config{})
 	require.NoError(t, err, "创建数据库失败")
 
 	// 自动迁移

@@ -8,12 +8,16 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	_ "modernc.org/sqlite" // 使用纯 Go 的 SQLite 驱动（不需要 CGO）
 )
 
 // setupTestDB 创建测试数据库
 func setupTestDB(t *testing.T) *gorm.DB {
 	// 使用内存 SQLite 数据库进行测试
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Dialector{
+		DriverName: "sqlite",
+		DSN:        ":memory:",
+	}, &gorm.Config{})
 	require.NoError(t, err, "创建测试数据库失败")
 
 	// 自动迁移表结构

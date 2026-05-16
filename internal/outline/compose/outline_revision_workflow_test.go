@@ -18,7 +18,7 @@ func TestOutlineRevisionWorkflow(t *testing.T) {
 	repo := repository.NewRepository(db)
 
 	// 构建 Graph
-	graph, err := BuildOutlineRevisionWorkflowGraph(ctx, chatModel, db, repo)
+	graph, err := BuildOutlineRevisionWorkflowGraph(ctx, chatModel, repo)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}

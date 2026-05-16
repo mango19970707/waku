@@ -8,11 +8,13 @@ import (
 	"waku/internal/config"
 	"waku/internal/model"
 	"waku/internal/plotline/compose"
+	plotlineRepo "waku/internal/plotline/repository"
 	"waku/internal/utils"
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
+	_ "modernc.org/sqlite" // 使用纯 Go 的 SQLite 驱动（不需要 CGO）
 	"gorm.io/gorm"
 )
 
@@ -54,8 +56,12 @@ func TestPlotlineGenerateWorkflowGraph(t *testing.T) {
 		db.Delete(testNovel)
 	}()
 
+	// 创建 repository
+	novelRepo := plotlineRepo.NewRepository(db)
+	plotlineRepository := plotlineRepo.NewPlotlineRepository(db)
+
 	// 构建 Graph
-	graph, err := compose.NewPlotlineExtractWorkflow(ctx, chatModel, db)
+	graph, err := compose.NewPlotlineExtractWorkflow(ctx, chatModel, novelRepo, plotlineRepository)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}
@@ -82,8 +88,12 @@ func TestPlotlineRevisionWorkflowGraph(t *testing.T) {
 	// 创建测试数据库
 	db := setupTestDBForTools(t)
 
+	// 创建 repository
+	novelRepo := plotlineRepo.NewRepository(db)
+	plotlineRepository := plotlineRepo.NewPlotlineRepository(db)
+
 	// 构建 Graph
-	graph, err := compose.NewPlotlineRevisionWorkflow(ctx, chatModel, db)
+	graph, err := compose.NewPlotlineRevisionWorkflow(ctx, chatModel, novelRepo, plotlineRepository)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}
@@ -110,7 +120,10 @@ func setupTestDBForTools(t *testing.T) *gorm.DB {
 	// 使用项目根目录的 data 目录存储测试数据库
 	dbPath := "../../data/waku.db"
 
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Dialector{
+		DriverName: "sqlite",
+		DSN:        dbPath,
+	}, &gorm.Config{})
 	require.NoError(t, err, "创建测试数据库失败")
 
 	err = db.AutoMigrate(&model.Novel{})

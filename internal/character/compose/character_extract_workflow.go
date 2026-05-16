@@ -6,7 +6,6 @@ import (
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"
-	"gorm.io/gorm"
 
 	"waku/internal/character/repository"
 )
@@ -35,8 +34,8 @@ type CharacterExtractWorkflowState struct {
 //
 // 参数：
 //   - ctx: 上下文对象
-//   - db: 数据库连接
 //   - chatModel: 聊天模型
+//   - novelRepo: Novel 仓储
 //   - characterRepo: 人物仓储
 //
 // 返回：
@@ -44,17 +43,17 @@ type CharacterExtractWorkflowState struct {
 //   - error: 错误信息
 func NewCharacterExtractWorkflow(
 	ctx context.Context,
-	db *gorm.DB,
 	chatModel einoModel.BaseChatModel,
+	novelRepo NovelRepository,
 	characterRepo repository.CharacterRepository,
 ) (compose.Runnable[*CharacterExtractWorkflowInput, *CharacterExtractWorkflowState], error) {
 	// 创建工作流图
 	graph := compose.NewGraph[*CharacterExtractWorkflowInput, *CharacterExtractWorkflowState]()
 
 	// 添加节点
-	graph.AddLambdaNode("init", compose.InvokableLambda(initExtractNode(db)))
+	graph.AddLambdaNode("init", compose.InvokableLambda(initExtractNode(novelRepo)))
 	graph.AddLambdaNode("extract", compose.InvokableLambda(extractNode(ctx, chatModel)))
-	graph.AddLambdaNode("saveToDB", compose.InvokableLambda(saveToDBNode(db, characterRepo)))
+	graph.AddLambdaNode("saveToDB", compose.InvokableLambda(saveToDBNode(characterRepo)))
 
 	// 添加边
 	graph.AddEdge(compose.START, "init")

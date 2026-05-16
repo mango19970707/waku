@@ -3,11 +3,10 @@ package compose
 import (
 	"context"
 	"fmt"
-	"waku/internal/outline/tools"
+	"waku/internal/outline/repository"
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"
-	"gorm.io/gorm"
 )
 
 // OutlineWorkflowState 大纲工作流状态
@@ -115,7 +114,6 @@ func RegisterAgentExecutor(executor AgentExecutor) {
 // 参数：
 //   - ctx: 上下文
 //   - chatModel: 聊天模型实例
-//   - db: 数据库连接
 //   - repo: 小说仓储实现
 //
 // 返回值：
@@ -133,7 +131,7 @@ func RegisterAgentExecutor(executor AgentExecutor) {
 //   - 每个步骤的输出保存到 data/content/{小说名称}/abstract/{阶段}.md
 //   - 支持断点续传：如果文件已存在，直接加载而不重新生成
 //   - 工具调用失败自动重试3次
-func BuildOutlineWorkflowGraph(ctx context.Context, chatModel einoModel.BaseChatModel, db *gorm.DB, repo tools.Repository) (compose.Runnable[*OutlineWorkflowInput, *OutlineWorkflowState], error) {
+func BuildOutlineWorkflowGraph(ctx context.Context, chatModel einoModel.BaseChatModel, repo repository.Repository) (compose.Runnable[*OutlineWorkflowInput, *OutlineWorkflowState], error) {
 	graph := compose.NewGraph[*OutlineWorkflowInput, *OutlineWorkflowState]()
 
 	// 添加节点
@@ -142,7 +140,7 @@ func BuildOutlineWorkflowGraph(ctx context.Context, chatModel einoModel.BaseChat
 	graph.AddLambdaNode("expand", compose.InvokableLambda(expandNode(ctx, chatModel)))
 	graph.AddLambdaNode("polish", compose.InvokableLambda(polishNode(ctx, chatModel)))
 	graph.AddLambdaNode("extract", compose.InvokableLambda(extractNode(ctx, chatModel)))
-	graph.AddLambdaNode("saveToDB", compose.InvokableLambda(saveToDBNode(db, repo)))
+	graph.AddLambdaNode("saveToDB", compose.InvokableLambda(saveToDBNode(repo)))
 
 	// 添加边
 	graph.AddEdge(compose.START, "init")

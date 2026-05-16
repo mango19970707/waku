@@ -10,6 +10,7 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	_ "modernc.org/sqlite" // 使用纯 Go 的 SQLite 驱动（不需要 CGO）
 )
 
 // Config 数据库配置
@@ -96,8 +97,11 @@ func connectSQLite(cfg *Config, gormConfig *gorm.Config) (*gorm.DB, error) {
 		return nil, fmt.Errorf("创建数据目录失败: %w", err)
 	}
 
-	// 连接 SQLite 数据库
-	db, err := gorm.Open(sqlite.Open(cfg.DataPath), gormConfig)
+	// 使用 modernc.org/sqlite 驱动（纯 Go 实现，不需要 CGO）
+	db, err := gorm.Open(sqlite.Dialector{
+		DriverName: "sqlite",
+		DSN:        cfg.DataPath,
+	}, gormConfig)
 	if err != nil {
 		return nil, fmt.Errorf("连接 SQLite 数据库失败: %w", err)
 	}

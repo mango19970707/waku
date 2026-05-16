@@ -9,11 +9,10 @@ import (
 
 	"waku/internal/constant"
 	"waku/internal/model"
-	"waku/internal/outline/tools"
+	"waku/internal/outline/repository"
 	"waku/internal/utils"
 
 	einoModel "github.com/cloudwego/eino/components/model"
-	"gorm.io/gorm"
 )
 
 // initNode 初始化节点（将输入转换为状态）
@@ -287,7 +286,7 @@ func getUserApproval(state *OutlineWorkflowState) (bool, string) {
 }
 
 // saveToDBNode 保存到数据库节点
-func saveToDBNode(db *gorm.DB, repo tools.Repository) func(context.Context, *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+func saveToDBNode(repo repository.Repository) func(context.Context, *OutlineWorkflowState) (*OutlineWorkflowState, error) {
 	return func(ctx context.Context, state *OutlineWorkflowState) (*OutlineWorkflowState, error) {
 		fmt.Printf("\n🤖 [保存] 准备保存到数据库...\n")
 
@@ -314,8 +313,8 @@ func saveToDBNode(db *gorm.DB, repo tools.Repository) func(context.Context, *Out
 			fmt.Printf("  → 更新已有小说 (ID: %d)\n", state.NovelID)
 
 			// 查询已有小说
-			var existingNovel model.Novel
-			if err := db.First(&existingNovel, state.NovelID).Error; err != nil {
+			existingNovel, err := repo.GetByID(state.NovelID)
+			if err != nil {
 				state.ErrorMsg = fmt.Sprintf("查询小说失败: %v", err)
 				state.CurrentNode = "save_failed"
 				return state, nil
@@ -331,7 +330,7 @@ func saveToDBNode(db *gorm.DB, repo tools.Repository) func(context.Context, *Out
 			existingNovel.CultivationSystem = state.ExtractedInfo.CultivationSystem
 
 			// 保存更新
-			if err := db.Save(&existingNovel).Error; err != nil {
+			if err := repo.Update(existingNovel); err != nil {
 				state.ErrorMsg = fmt.Sprintf("更新小说失败: %v", err)
 				state.CurrentNode = "save_failed"
 				return state, nil
@@ -390,13 +389,13 @@ func saveToDBNode(db *gorm.DB, repo tools.Repository) func(context.Context, *Out
 // ==================== revision节点实现 ====================
 
 // initRevisionNode 初始化修改工作流节点（从数据库加载小说信息）
-func initRevisionNode(db *gorm.DB) func(context.Context, *OutlineRevisionWorkflowInput) (*OutlineRevisionWorkflowState, error) {
+func initRevisionNode(repo repository.Repository) func(context.Context, *OutlineRevisionWorkflowInput) (*OutlineRevisionWorkflowState, error) {
 	return func(ctx context.Context, input *OutlineRevisionWorkflowInput) (*OutlineRevisionWorkflowState, error) {
 		fmt.Printf("\n🤖 [初始化] 从数据库加载小说信息...\n")
 
 		// 查询小说信息
-		var novel model.Novel
-		if err := db.First(&novel, input.NovelID).Error; err != nil {
+		novel, err := repo.GetByID(input.NovelID)
+		if err != nil {
 			return nil, fmt.Errorf("查询小说失败: %w", err)
 		}
 
@@ -484,7 +483,7 @@ func extractRevisionNode(ctx context.Context, chatModel einoModel.BaseChatModel)
 }
 
 // updateDBNode 更新数据库节点
-func updateDBNode(db *gorm.DB) func(context.Context, *OutlineRevisionWorkflowState) (*OutlineRevisionWorkflowState, error) {
+func updateDBNode(repo repository.Repository) func(context.Context, *OutlineRevisionWorkflowState) (*OutlineRevisionWorkflowState, error) {
 	return func(ctx context.Context, state *OutlineRevisionWorkflowState) (*OutlineRevisionWorkflowState, error) {
 		fmt.Printf("\n🤖 [更新] 开始更新数据库...\n")
 
@@ -496,8 +495,8 @@ func updateDBNode(db *gorm.DB) func(context.Context, *OutlineRevisionWorkflowSta
 		}
 
 		// 查询已有小说
-		var existingNovel model.Novel
-		if err := db.First(&existingNovel, state.NovelID).Error; err != nil {
+		existingNovel, err := repo.GetByID(state.NovelID)
+		if err != nil {
 			state.ErrorMsg = fmt.Sprintf("查询小说失败: %v", err)
 			state.CurrentNode = "update_failed"
 			return state, nil
@@ -513,7 +512,7 @@ func updateDBNode(db *gorm.DB) func(context.Context, *OutlineRevisionWorkflowSta
 		existingNovel.CultivationSystem = state.ExtractedInfo.CultivationSystem
 
 		// 保存更新
-		if err := db.Save(&existingNovel).Error; err != nil {
+		if err := repo.Update(existingNovel); err != nil {
 			state.ErrorMsg = fmt.Sprintf("更新小说失败: %v", err)
 			state.CurrentNode = "update_failed"
 			return state, nil
