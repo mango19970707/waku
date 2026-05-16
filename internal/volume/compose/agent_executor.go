@@ -3,64 +3,94 @@ package compose
 import (
 	"context"
 	"fmt"
+
 	"waku/internal/volume/agents"
 
 	einoModel "github.com/cloudwego/eino/components/model"
 )
 
-// agentExecutorImpl 实现 compose.AgentExecutor 接口
-type agentExecutorImpl struct{}
-
-func (e *agentExecutorImpl) PartitionVolumes(ctx context.Context, chatModel einoModel.BaseChatModel, novelOutline, genre string, suggestedVolumeCount int) (string, error) {
-	agent, err := agents.NewVolumePartitionAgent(ctx, chatModel)
-	if err != nil {
-		return "", fmt.Errorf("创建分卷 Agent 失败: %w", err)
-	}
-
-	input := &agents.VolumePartitionInput{
-		NovelOutline:         novelOutline,
-		Genre:                genre,
-		SuggestedVolumeCount: suggestedVolumeCount,
-	}
-
-	return agents.PartitionVolumes(ctx, agent, input)
+// AgentExecutor 定义分卷工作流的 Agent 执行接口。
+type AgentExecutor interface {
+	GenerateVolumes(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, plotlines, existingVolumes string) (string, error)
+	PolishVolumes(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, plotlines, volumes, targetVolume, userSuggestion string) (string, error)
+	ReviewVolumes(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, plotlines, volumes, targetVolume, userSuggestion string) (string, error)
+	ReviseVolumes(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, plotlines, volumes, targetVolume, userSuggestion string) (string, error)
 }
 
-func (e *agentExecutorImpl) ExtractVolumeInfo(ctx context.Context, chatModel einoModel.BaseChatModel, partitionedText, genre string) (*agents.VolumePartitionOutput, error) {
-	agent, err := agents.NewVolumeExtractorAgent(ctx, chatModel)
-	if err != nil {
-		return nil, fmt.Errorf("创建卷信息提取 Agent 失败: %w", err)
-	}
+type defaultAgentExecutor struct{}
 
-	input := &agents.VolumeExtractorInput{
-		PartitionedText: partitionedText,
+var agentExecutor AgentExecutor = &defaultAgentExecutor{}
+
+// RegisterAgentExecutor 注册自定义执行器。
+func RegisterAgentExecutor(executor AgentExecutor) {
+	agentExecutor = executor
+}
+
+func ensureAgentExecutor() error {
+	if agentExecutor == nil {
+		return fmt.Errorf("agent executor 未初始化")
+	}
+	return nil
+}
+
+func (e *defaultAgentExecutor) GenerateVolumes(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, plotlines, existingVolumes string) (string, error) {
+	agent, err := agents.NewVolumeGeneratorAgent(ctx, chatModel)
+	if err != nil {
+		return "", err
+	}
+	return agents.GenerateVolumes(ctx, agent, &agents.VolumeGeneratorInput{
+		Outline:         outline,
 		Genre:           genre,
-	}
-
-	return agents.ExtractVolumeInfo(ctx, agent, input)
+		Plotlines:       plotlines,
+		ExistingVolumes: existingVolumes,
+	})
 }
 
-func (e *agentExecutorImpl) PartitionChapters(ctx context.Context, chatModel einoModel.BaseChatModel, volumeOutline, genre string, volumeNumber, suggestedChapterCount int) (string, error) {
-	agent, err := agents.NewChapterPartitionAgent(ctx, chatModel)
+func (e *defaultAgentExecutor) PolishVolumes(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, plotlines, volumes, targetVolume, userSuggestion string) (string, error) {
+	agent, err := agents.NewVolumePolisherAgent(ctx, chatModel)
 	if err != nil {
-		return "", fmt.Errorf("创建分章 Agent 失败: %w", err)
+		return "", err
 	}
-
-	input := &agents.ChapterPartitionInput{
-		VolumeOutline:         volumeOutline,
-		Genre:                 genre,
-		VolumeNumber:          volumeNumber,
-		SuggestedChapterCount: suggestedChapterCount,
-	}
-
-	return agents.PartitionChapters(ctx, agent, input)
+	return agents.PolishVolumes(ctx, agent, &agents.VolumePolisherInput{
+		Outline:        outline,
+		Genre:          genre,
+		Plotlines:      plotlines,
+		Volumes:        volumes,
+		TargetVolume:   targetVolume,
+		UserSuggestion: userSuggestion,
+	})
 }
 
-func (e *agentExecutorImpl) ExtractChapterInfo(ctx context.Context, chatModel einoModel.BaseChatModel, partitionedText, genre string) (*agents.ChapterPartitionOutput, error) {
-	return agents.ExtractChapterInfo(ctx, chatModel, partitionedText, genre)
+func (e *defaultAgentExecutor) ReviewVolumes(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, plotlines, volumes, targetVolume, userSuggestion string) (string, error) {
+	agent, err := agents.NewVolumeReviewerAgent(ctx, chatModel)
+	if err != nil {
+		return "", err
+	}
+	return agents.ReviewVolumes(ctx, agent, &agents.VolumeReviewerInput{
+		Outline:        outline,
+		Genre:          genre,
+		Plotlines:      plotlines,
+		Volumes:        volumes,
+		TargetVolume:   targetVolume,
+		UserSuggestion: userSuggestion,
+	})
 }
 
-// 在包初始化时注册 Agent 执行器
+func (e *defaultAgentExecutor) ReviseVolumes(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, plotlines, volumes, targetVolume, userSuggestion string) (string, error) {
+	agent, err := agents.NewVolumeReviserAgent(ctx, chatModel)
+	if err != nil {
+		return "", err
+	}
+	return agents.ReviseVolumes(ctx, agent, &agents.VolumeReviserInput{
+		Outline:        outline,
+		Genre:          genre,
+		Plotlines:      plotlines,
+		Volumes:        volumes,
+		TargetVolume:   targetVolume,
+		UserSuggestion: userSuggestion,
+	})
+}
+
 func init() {
-	RegisterAgentExecutor(&agentExecutorImpl{})
+	RegisterAgentExecutor(&defaultAgentExecutor{})
 }

@@ -24,8 +24,13 @@ type outlineFilePayload struct {
 }
 
 func initNode(repo repository.Repository) func(context.Context, *OutlineWorkflowInput) (*OutlineWorkflowState, error) {
-	return func(ctx context.Context, input *OutlineWorkflowInput) (*OutlineWorkflowState, error) {
-		state := &OutlineWorkflowState{
+	return func(ctx context.Context, input *OutlineWorkflowInput) (state *OutlineWorkflowState, err error) {
+		logInitNodeInput(ctx, input)
+		defer func() {
+			logNodeOutput(ctx, "init", state, err)
+		}()
+
+		state = &OutlineWorkflowState{
 			CurrentNode:     "init_success",
 			NovelID:         input.NovelID,
 			NovelName:       strings.TrimSpace(input.NovelName),
@@ -65,7 +70,13 @@ func initNode(repo repository.Repository) func(context.Context, *OutlineWorkflow
 }
 
 func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *OutlineWorkflowState) (*OutlineWorkflowState, error) {
-	return func(ctx context.Context, state *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+	return func(ctx context.Context, state *OutlineWorkflowState) (result *OutlineWorkflowState, err error) {
+		logStateNodeInput(ctx, "generate", state)
+		result = state
+		defer func() {
+			logNodeOutput(ctx, "generate", result, err)
+		}()
+
 		if state.GeneratedOutline != "" {
 			state.CurrentNode = "generate_success"
 			return state, nil
@@ -91,14 +102,14 @@ func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(c
 			return state, nil
 		}
 
-		result, err := agentExecutor.GenerateOutline(ctx, chatModel, state.OriginalOutline, state.Genre)
+		generated, err := agentExecutor.GenerateOutline(ctx, chatModel, state.OriginalOutline, state.Genre)
 		if err != nil {
 			state.CurrentNode = "generate_failed"
 			state.ErrorMsg = fmt.Sprintf("生成大纲失败: %v", err)
 			return state, nil
 		}
 
-		normalized, payload, err := contracts.NormalizeNovelPayload(result, state.Genre)
+		normalized, payload, err := contracts.NormalizeNovelPayload(generated, state.Genre)
 		if err != nil {
 			state.CurrentNode = "generate_failed"
 			state.ErrorMsg = fmt.Sprintf("生成阶段输出格式无效: %v", err)
@@ -120,7 +131,13 @@ func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(c
 }
 
 func expandNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *OutlineWorkflowState) (*OutlineWorkflowState, error) {
-	return func(ctx context.Context, state *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+	return func(ctx context.Context, state *OutlineWorkflowState) (result *OutlineWorkflowState, err error) {
+		logStateNodeInput(ctx, "expand", state)
+		result = state
+		defer func() {
+			logNodeOutput(ctx, "expand", result, err)
+		}()
+
 		if state.ExpandedOutline != "" {
 			state.CurrentNode = "expand_success"
 			return state, nil
@@ -146,14 +163,14 @@ func expandNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			return state, nil
 		}
 
-		result, err := agentExecutor.ExpandOutline(ctx, chatModel, state.GeneratedOutline, state.Genre)
+		expanded, err := agentExecutor.ExpandOutline(ctx, chatModel, state.GeneratedOutline, state.Genre)
 		if err != nil {
 			state.CurrentNode = "expand_failed"
 			state.ErrorMsg = fmt.Sprintf("扩写大纲失败: %v", err)
 			return state, nil
 		}
 
-		normalized, payload, err := contracts.NormalizeNovelPayload(result, state.Genre)
+		normalized, payload, err := contracts.NormalizeNovelPayload(expanded, state.Genre)
 		if err != nil {
 			state.CurrentNode = "expand_failed"
 			state.ErrorMsg = fmt.Sprintf("扩写阶段输出格式无效: %v", err)
@@ -175,7 +192,13 @@ func expandNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 }
 
 func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *OutlineWorkflowState) (*OutlineWorkflowState, error) {
-	return func(ctx context.Context, state *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+	return func(ctx context.Context, state *OutlineWorkflowState) (result *OutlineWorkflowState, err error) {
+		logStateNodeInput(ctx, "polish", state)
+		result = state
+		defer func() {
+			logNodeOutput(ctx, "polish", result, err)
+		}()
+
 		if state.PolishedOutline != "" {
 			state.CurrentNode = "polish_success"
 			return state, nil
@@ -206,14 +229,14 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			source = state.OriginalOutline
 		}
 
-		result, err := agentExecutor.PolishOutline(ctx, chatModel, source, state.Genre)
+		polished, err := agentExecutor.PolishOutline(ctx, chatModel, source, state.Genre)
 		if err != nil {
 			state.CurrentNode = "polish_failed"
 			state.ErrorMsg = fmt.Sprintf("润色大纲失败: %v", err)
 			return state, nil
 		}
 
-		normalized, payload, err := contracts.NormalizeNovelPayload(result, state.Genre)
+		normalized, payload, err := contracts.NormalizeNovelPayload(polished, state.Genre)
 		if err != nil {
 			state.CurrentNode = "polish_failed"
 			state.ErrorMsg = fmt.Sprintf("润色阶段输出格式无效: %v", err)
@@ -235,7 +258,13 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 }
 
 func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *OutlineWorkflowState) (*OutlineWorkflowState, error) {
-	return func(ctx context.Context, state *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+	return func(ctx context.Context, state *OutlineWorkflowState) (result *OutlineWorkflowState, err error) {
+		logStateNodeInput(ctx, "review", state)
+		result = state
+		defer func() {
+			logNodeOutput(ctx, "review", result, err)
+		}()
+
 		if state.ReviewSuggestions != "" {
 			state.CurrentNode = "review_success"
 			return state, nil
@@ -261,14 +290,14 @@ func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			return state, nil
 		}
 
-		result, err := agentExecutor.ReviewOutline(ctx, chatModel, state.PolishedOutline, state.Genre)
+		reviewed, err := agentExecutor.ReviewOutline(ctx, chatModel, state.PolishedOutline, state.Genre)
 		if err != nil {
 			state.CurrentNode = "review_failed"
 			state.ErrorMsg = fmt.Sprintf("审核大纲失败: %v", err)
 			return state, nil
 		}
 
-		normalized, payload, err := contracts.NormalizeNovelPayload(result, state.Genre)
+		normalized, payload, err := contracts.NormalizeNovelPayload(reviewed, state.Genre)
 		if err != nil {
 			state.CurrentNode = "review_failed"
 			state.ErrorMsg = fmt.Sprintf("审核阶段输出格式无效: %v", err)
@@ -290,7 +319,13 @@ func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 }
 
 func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *OutlineWorkflowState) (*OutlineWorkflowState, error) {
-	return func(ctx context.Context, state *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+	return func(ctx context.Context, state *OutlineWorkflowState) (result *OutlineWorkflowState, err error) {
+		logStateNodeInput(ctx, "revise", state)
+		result = state
+		defer func() {
+			logNodeOutput(ctx, "revise", result, err)
+		}()
+
 		if state.RevisedOutline != "" {
 			state.CurrentNode = "revise_success"
 			return state, nil
@@ -321,14 +356,14 @@ func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			suggestions = state.UserSuggestion
 		}
 
-		result, err := agentExecutor.ReviseOutline(ctx, chatModel, state.PolishedOutline, suggestions, state.Genre)
+		revised, err := agentExecutor.ReviseOutline(ctx, chatModel, state.PolishedOutline, suggestions, state.Genre)
 		if err != nil {
 			state.CurrentNode = "revise_failed"
 			state.ErrorMsg = fmt.Sprintf("修改大纲失败: %v", err)
 			return state, nil
 		}
 
-		normalized, payload, err := contracts.NormalizeNovelPayload(result, state.Genre)
+		normalized, payload, err := contracts.NormalizeNovelPayload(revised, state.Genre)
 		if err != nil {
 			state.CurrentNode = "revise_failed"
 			state.ErrorMsg = fmt.Sprintf("修改阶段输出格式无效: %v", err)
@@ -350,7 +385,13 @@ func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 }
 
 func saveToDBNode(repo repository.Repository) func(context.Context, *OutlineWorkflowState) (*OutlineWorkflowState, error) {
-	return func(ctx context.Context, state *OutlineWorkflowState) (*OutlineWorkflowState, error) {
+	return func(ctx context.Context, state *OutlineWorkflowState) (result *OutlineWorkflowState, err error) {
+		logStateNodeInput(ctx, "saveToDB", state)
+		result = state
+		defer func() {
+			logNodeOutput(ctx, "saveToDB", result, err)
+		}()
+
 		if state.SavedNovelID > 0 {
 			state.CurrentNode = "save_success"
 			return state, nil

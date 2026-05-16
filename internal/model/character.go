@@ -9,10 +9,10 @@ import (
 // Character 表示小说中的一个角色
 type Character struct {
 	// ID 角色唯一标识
-	ID string `gorm:"primaryKey;type:varchar(36)" json:"id"`
+	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
 
 	// NovelID 所属小说 ID
-	NovelID string `gorm:"type:varchar(36);not null;index" json:"novel_id"`
+	NovelID uint `gorm:"not null;index" json:"novel_id"`
 
 	// Name 角色名称
 	Name string `gorm:"type:varchar(100);not null" json:"name"`
@@ -36,7 +36,7 @@ type Character struct {
 	Background string `gorm:"type:text" json:"background"`
 
 	// PlotlineIDs 角色关联的剧情线ID列表
-	PlotlineIDs StringArray `gorm:"type:text" json:"plotline_ids"`
+	PlotlineIDs UintArray `gorm:"type:text" json:"plotline_ids"`
 
 	// Relationships 角色关系映射，格式：{"角色ID": "和当前角色的关系描述"}
 	Relationships RelationshipMap `gorm:"type:text" json:"relationships"`

@@ -2,110 +2,62 @@ package compose
 
 import (
 	"context"
+	"fmt"
+	"waku/internal/character/agents"
 
 	einoModel "github.com/cloudwego/eino/components/model"
-
-	"waku/internal/character/agents"
 )
 
-// AgentExecutor Agent 执行器接口
-// 用于工作流中调用各个 Agent，支持依赖注入和测试 Mock
 type AgentExecutor interface {
-	// ExtractCharacter 提取人物信息（返回字符串）
-	ExtractCharacter(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre string) (string, error)
-
-	// ExtractCharactersJSON 提取人物信息（返回结构化 JSON）
-	ExtractCharactersJSON(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre string) (*agents.CharacterExtractorOutput, error)
-
-	// ReviewCharactersJSON 审核人物信息（返回结构化 JSON）
-	ReviewCharactersJSON(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters string) (*agents.CharacterReviewerOutput, error)
-
-	// ReviseCharactersJSON 优化人物信息（返回结构化 JSON）
-	ReviseCharactersJSON(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, existingCharacters, userSuggestion string) (*agents.CharacterRevisionOutput, error)
+	ExtractCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, existingCharacters string) (string, error)
+	PolishCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters, userSuggestion string) (string, error)
+	ReviewCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters, userSuggestion string) (string, error)
+	ReviseCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters, userSuggestion string) (string, error)
 }
 
-// agentExecutor 全局执行器实例
-var agentExecutor AgentExecutor
+type defaultAgentExecutor struct{}
 
-// RegisterAgentExecutor 注册 Agent 执行器
-//
-// 参数：
-//   - executor: 执行器实例
+var agentExecutor AgentExecutor = &defaultAgentExecutor{}
+
 func RegisterAgentExecutor(executor AgentExecutor) {
 	agentExecutor = executor
 }
 
-// GetAgentExecutor 获取 Agent 执行器
-//
-// 返回：
-//   - AgentExecutor: 执行器实例
-func GetAgentExecutor() AgentExecutor {
+func ensureAgentExecutor() error {
 	if agentExecutor == nil {
-		// 如果未注册，使用默认的真实实现
-		agentExecutor = &realAgentExecutor{}
+		return fmt.Errorf("agent executor 未初始化")
 	}
-	return agentExecutor
+	return nil
 }
 
-// realAgentExecutor 真实的 Agent 执行器实现
-type realAgentExecutor struct{}
-
-// ExtractCharacter 提取人物信息（返回字符串）
-func (e *realAgentExecutor) ExtractCharacter(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre string) (string, error) {
+func (e *defaultAgentExecutor) ExtractCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, existingCharacters string) (string, error) {
 	agent, err := agents.NewCharacterExtractorAgent(ctx, chatModel)
 	if err != nil {
 		return "", err
 	}
-
-	return agents.ExtractCharacter(ctx, agent, &agents.CharacterExtractorInput{
-		Outline: outline,
-		Genre:   genre,
-	})
+	return agents.ExtractCharacters(ctx, agent, outline, genre, existingCharacters)
 }
 
-// ExtractCharactersJSON 提取人物信息（返回结构化 JSON）
-func (e *realAgentExecutor) ExtractCharactersJSON(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre string) (*agents.CharacterExtractorOutput, error) {
-	agent, err := agents.NewCharacterExtractorAgent(ctx, chatModel)
+func (e *defaultAgentExecutor) PolishCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters, userSuggestion string) (string, error) {
+	agent, err := agents.NewCharacterPolisherAgent(ctx, chatModel)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-
-	return agents.ExtractCharacters(ctx, agent, &agents.CharacterExtractorInput{
-		Outline: outline,
-		Genre:   genre,
-	})
+	return agents.PolishCharacters(ctx, agent, outline, genre, characters, userSuggestion)
 }
 
-// ReviewCharactersJSON 审核人物信息（返回结构化 JSON）
-func (e *realAgentExecutor) ReviewCharactersJSON(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters string) (*agents.CharacterReviewerOutput, error) {
+func (e *defaultAgentExecutor) ReviewCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters, userSuggestion string) (string, error) {
 	agent, err := agents.NewCharacterReviewerAgent(ctx, chatModel)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-
-	return agents.ReviewCharacters(ctx, agent, &agents.CharacterReviewerInput{
-		Outline:    outline,
-		Genre:      genre,
-		Characters: characters,
-	})
+	return agents.ReviewCharacters(ctx, agent, outline, genre, characters, userSuggestion)
 }
 
-// ReviseCharactersJSON 优化人物信息（返回结构化 JSON）
-func (e *realAgentExecutor) ReviseCharactersJSON(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, existingCharacters, userSuggestion string) (*agents.CharacterRevisionOutput, error) {
-	agent, err := agents.NewCharacterRevisionAgent(ctx, chatModel)
+func (e *defaultAgentExecutor) ReviseCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters, userSuggestion string) (string, error) {
+	agent, err := agents.NewCharacterReviserAgent(ctx, chatModel)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-
-	return agents.ReviseCharacters(ctx, agent, &agents.CharacterRevisionInput{
-		Outline:            outline,
-		Genre:              genre,
-		ExistingCharacters: existingCharacters,
-		UserSuggestion:     userSuggestion,
-	})
-}
-
-// init 初始化函数，注册默认的真实实现
-func init() {
-	RegisterAgentExecutor(&realAgentExecutor{})
+	return agents.ReviseCharacters(ctx, agent, outline, genre, characters, userSuggestion)
 }

@@ -128,27 +128,43 @@ func BuildOutlineWorkflowGraph(ctx context.Context, chatModel einoModel.BaseChat
 
 // ExecuteOutlineWorkflow 执行统一大纲工作流。
 func ExecuteOutlineWorkflow(ctx context.Context, graph compose.Runnable[*OutlineWorkflowInput, *OutlineWorkflowState], input *OutlineWorkflowInput) (*OutlineWorkflowState, error) {
+	logWorkflowInput(ctx, input)
+
 	if input == nil {
 		return nil, fmt.Errorf("工作流输入不能为空")
 	}
 
+	var (
+		state *OutlineWorkflowState
+		err   error
+	)
+	defer func() {
+		logWorkflowOutput(ctx, state, err)
+	}()
+
 	isQuickRevision := input.NovelID > 0 && input.UserSuggestion != ""
 	if isQuickRevision {
 		if input.Genre == "" {
-			return nil, fmt.Errorf("快速修改模式下小说类型不能为空")
+			err = fmt.Errorf("快速修改模式下小说类型不能为空")
+			return nil, err
 		}
-		return graph.Invoke(ctx, input)
+		state, err = graph.Invoke(ctx, input)
+		return state, err
 	}
 
 	if input.Author == "" {
-		return nil, fmt.Errorf("完整生成模式下作者名称不能为空")
+		err = fmt.Errorf("完整生成模式下作者名称不能为空")
+		return nil, err
 	}
 	if input.Genre == "" {
-		return nil, fmt.Errorf("完整生成模式下小说类型不能为空")
+		err = fmt.Errorf("完整生成模式下小说类型不能为空")
+		return nil, err
 	}
 	if input.OriginalOutline == "" {
-		return nil, fmt.Errorf("完整生成模式下原始大纲不能为空")
+		err = fmt.Errorf("完整生成模式下原始大纲不能为空")
+		return nil, err
 	}
 
-	return graph.Invoke(ctx, input)
+	state, err = graph.Invoke(ctx, input)
+	return state, err
 }

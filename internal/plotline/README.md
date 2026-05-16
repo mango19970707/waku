@@ -1,527 +1,149 @@
-# Plotline 模块 - 小说剧情线提取优化工作流
+# Plotline 模块
 
 ## 概述
 
-Plotline 模块是 Waku 项目中负责小说剧情线提取和优化的核心模块。通过 AI Agent 和工作流编排，实现从小说大纲中自动提取主线和支线剧情、根据用户建议修改剧情线等功能。
+Plotline 模块负责小说剧情线的生成、润色、审核和修改。模块保留原有的 Agent 创建方式和 `compose.Graph` 工作流结构，但会将现有拆分的提取/修订流程统一为一个剧情线工作流。
 
-## 目录结构
+当前重构目标是围绕 4 个 Agent 展开：
 
-```
-internal/plotline/
-├── agents/                                    # Agent 实现层（3个Agent）
-│   ├── plotline_extractor_agent.go            # 剧情线提取 Agent
-│   ├── plotline_polisher_agent.go             # 剧情线润色 Agent
-│   └── plotline_revision_agent.go             # 剧情线修改 Agent
-├── compose/                                   # 工作流编排层
-│   ├── plotline_extract_workflow.go           # 剧情线提取工作流
-│   ├── plotline_revision_workflow.go          # 剧情线修改工作流
-│   ├── nodes.go                               # 工作流节点实现
-│   ├── router.go                              # 工作流路由逻辑
-│   └── agent_executor.go                      # Agent 执行器（工厂模式）
-├── prompts/                                   # 提示词层（3个提示词）
-│   ├── plotline_extractor_prompt.go           # 提取提示词
-│   ├── plotline_polisher_prompt.go            # 润色提示词
-│   └── plotline_revision_prompt.go            # 修改提示词
-└── repository/                                # 数据仓储层
-    ├── plotline_repository.go                 # 剧情线数据访问
-    └── repository.go                          # 仓储接口定义
-```
+- 生成 Agent：根据小说大纲生成剧情线
+- 润色 Agent：优化剧情线表述、节奏和清晰度
+- 审核 Agent：审核各条剧情线之间是否冲突，并优先采用与用户建议相关的修改方向
+- 修改 Agent：根据审核结论和用户建议修改目标剧情线及必要的关联剧情线
 
-## 核心功能
+## 统一输出契约
 
-### 1. 剧情线提取（PlotlineExtractorAgent）
+每个剧情线 Agent 都必须输出严格 JSON，顶层只允许这 1 个字段：
 
-从小说大纲中自动提取所有主线和支线剧情。
-
-**提取字段：**
-- `title`：剧情线标题
-- `type`：剧情线类型（main-主线、sub-支线）
-- `description`：剧情线描述（200-800字）
-- `start_chapter`：起始章节序号
-- `end_chapter`：结束章节序号（0 表示未结束）
-
-**输出格式：** JSON
-
-**示例输出：**
 ```json
 {
   "plotlines": [
     {
-      "title": "修仙之路",
+      "id": 0,
+      "title": "剧情线标题",
       "type": "main",
-      "description": "主角从凡人开始修炼，经历筑基、金丹、元婴等境界...",
-      "start_chapter": 1,
-      "end_chapter": 0
-    },
-    {
-      "title": "宗门争斗",
-      "type": "sub",
-      "description": "主角所在宗门与其他宗门的矛盾冲突...",
-      "start_chapter": 10,
-      "end_chapter": 25
+      "description": "剧情线描述",
+      "status": "active"
     }
   ]
 }
 ```
 
-### 2. 剧情线润色（PlotlinePolisherAgent）
+约束如下：
 
-对提取的剧情线进行优化，改善描述质量和逻辑连贯性。
+- 顶层字段只能是 `plotlines`
+- `plotlines` 必须是数组，不能为空
+- 每条剧情线至少必须包含 `title`、`type`、`description`
+- `id` 在完整生成模式下可以为空或省略，由数据库自增补齐；在快速修改模式下，目标剧情线必须保留原有 `id`
+- `type` 当前只允许 `main` 和 `sub`
+- `status` 当前建议统一使用 `active`、`paused`、`completed`
+- 审核和修改阶段可以在单条剧情线内补充额外字段，例如 `review_suggestions`、`conflict_notes`、`revision_reason`
 
-**输入参数：**
-- `plotlines`：待润色的剧情线列表（JSON 格式）
-- `genre`：小说类型
-
-**输出：** 优化后的剧情线列表（JSON 格式）
-
-### 3. 剧情线修改（PlotlineRevisionAgent）
-
-根据用户建议对剧情线进行修改、删除和新增。
-
-**支持操作：**
-- **修改现有剧情线**：保留原有 ID，修改部分或全部字段
-- **删除剧情线**：直接在输出中省略该剧情线
-- **新增剧情线**：ID 设置为空字符串，系统自动生成 UUID
-
-**输入参数：**
-- `existing_plotlines`：现有剧情线列表（JSON 格式）
-- `user_suggestion`：用户的修改建议
-- `outline`：小说大纲（提供上下文）
-- `genre`：小说类型
-
-**输出：** 修改后的剧情线列表（JSON 格式）
+统一校验入口建议与 `outline` 模块保持一致，单独收敛到剧情线 payload 校验层。
 
 ## 工作流
 
-### 剧情线提取工作流（PlotlineExtractWorkflow）
+统一工作流保留两种模式：
 
-**流程图：**
+### 完整生成模式
 
-```
-START → init → extract → saveToDB → END
-         ↓       ↓         ↓
-      初始化   提取      保存
-      (1步)  (3重试)   (3重试)
-```
+触发条件：只输入 `NovelID`
 
-**节点说明：**
+执行流程：
 
-1. **initExtractNode**：初始化工作流状态
-   - 从数据库加载小说信息
-   - 验证大纲是否存在
-   - 初始化工作流状态
-
-2. **extractNode**：提取剧情线信息
-   - 支持断点续传（从文件加载已有内容）
-   - 调用 PlotlineExtractorAgent 执行提取
-   - 使用 MessageJSONParser 强制 JSON 输出
-   - 保存到 `data/content/{novelID-novelName}/plotline/提取.json`
-   - 失败自动重试 3 次
-
-3. **saveToDBNode**：保存到数据库
-   - 解析 JSON 数据
-   - 转换为 `model.Plotline` 对象
-   - 批量插入到数据库
-   - 收集保存后的 ID 列表
-
-### 剧情线修改工作流（PlotlineRevisionWorkflow）
-
-**流程图：**
-
-```
-START → init → revise → saveOrUpdateDB → END
-         ↓       ↓           ↓
-      加载    优化        保存/更新
-      (从DB) (3重试)     (3重试)
+```text
+START -> init -> generate -> polish -> review -> revise -> saveToDB -> END
 ```
 
-**节点说明：**
+### 快速修改模式
 
-1. **initRevisionNode**：初始化修改工作流
-   - 从数据库加载小说信息
-   - 查询该小说的所有剧情线
-   - 将剧情线转换为 JSON 格式
+触发条件：只输入 `PlotlineID + UserSuggestion`
 
-2. **reviseNode**：优化剧情线信息
-   - 调用 PlotlineRevisionAgent 执行优化
-   - 使用 MessageJSONParser 强制 JSON 输出
-   - 保存到 `data/content/{novelID-novelName}/plotline/修改.json`
-   - 失败自动重试 3 次
+执行流程：
 
-3. **saveOrUpdateDBNode**：保存或更新到数据库
-   - 解析 JSON 数据
-   - 分类处理：有 ID 的更新，无 ID 的新增
-   - 批量执行更新和插入操作
-   - 收集保存后的 ID 列表
-
-## 数据模型
-
-### PlotlineExtractWorkflowInput（提取工作流输入）
-
-```go
-type PlotlineExtractWorkflowInput struct {
-    NovelID uint // 小说ID（必填）
-}
+```text
+START -> init -> polish -> review -> revise -> saveToDB -> END
 ```
 
-### PlotlineExtractWorkflowState（提取工作流状态）
+说明：
 
-```go
-type PlotlineExtractWorkflowState struct {
-    CurrentNode        string   // 当前节点名称
-    NovelID            uint     // 小说ID
-    NovelName          string   // 小说名称
-    Author             string   // 作者
-    Genre              string   // 小说类型
-    Outline            string   // 小说大纲
-    ExtractedPlotlines string   // 提取的剧情线列表（JSON 格式）
-    SavedPlotlineIDs   []string // 保存到数据库后的剧情线 ID 列表
-    ErrorMsg           string   // 错误信息
-    RetryCount         int      // 重试次数
-    MaxRetries         int      // 最大重试次数
-}
+- 输入结构统一包含 `NovelID`、`PlotlineID`、`UserSuggestion`
+- 完整生成模式下，`init` 通过 `NovelID` 加载小说和大纲
+- 快速修改模式下，`init` 通过 `PlotlineID` 加载目标剧情线，并反查所属 `NovelID`、小说大纲和其他剧情线
+
+## 节点语义
+
+### init
+
+- 初始化工作流状态
+- 完整生成模式下从数据库加载 `model.Novel`
+- 快速修改模式下从数据库加载目标 `model.Plotline`，并补齐所属小说信息
+- 将当前小说大纲、目标剧情线、其他剧情线整理为统一 JSON，供后续 Agent 继续处理
+
+### generate / polish / review / revise
+
+- 每个节点都调用对应 Agent
+- 每个节点都会对输出做统一校验和规范化
+- 阶段文件仍保存为 `{content, stage, file_type}` 包装结构
+- 其中 `content` 保存的是统一 Plotlines JSON 字符串
+- 支持断点续传和按节点重试
+
+### review
+
+- 审核 Agent 不再单独输出“冲突列表 JSON”
+- 它仍然返回统一 Plotlines JSON
+- 审核结果写入单条剧情线的扩展字段，例如 `review_suggestions` 或 `conflict_notes`
+- 审核时应优先判断用户建议相关的改动是否会引发冲突，并优先保留用户建议方向
+
+### revise
+
+- 修改 Agent 根据 `review` 阶段结果和用户建议输出最终剧情线集合
+- 当只修改单条剧情线时，允许同步调整受影响的其他剧情线
+- 若无需调整的剧情线保持原样，也必须以统一 JSON 返回，避免后续保存阶段再做额外拼装
+
+### saveToDB
+
+- 最终只把剧情线核心字段落到 `model.Plotline`
+- `Plotline.ID <- id`
+- `Plotline.NovelID <- NovelID`
+- `Plotline.Title <- title`
+- `Plotline.Type <- type`
+- `Plotline.Description <- description`
+- `Plotline.Status <- status`
+
+因此数据库中只保存核心结构化字段，不直接保存审核扩展字段；扩展字段只作为工作流中间态和阶段文件内容存在。
+
+## 目录结构
+
+```text
+internal/plotline/
+├── agents/
+│   ├── common.go
+│   ├── plotline_generator_agent.go
+│   ├── plotline_polisher_agent.go
+│   ├── plotline_reviewer_agent.go
+│   └── plotline_reviser_agent.go
+├── compose/
+│   ├── agent_executor.go
+│   ├── nodes.go
+│   ├── plotline_workflow.go
+│   └── router.go
+├── contracts/
+│   └── plotline_payload.go
+├── prompts/
+│   ├── plotline_generator_prompt.go
+│   ├── plotline_polisher_prompt.go
+│   ├── plotline_reviewer_prompt.go
+│   └── plotline_reviser_prompt.go
+├── repository/
+│   ├── plotline_repository.go
+│   └── repository.go
+└── tools/
+    └── save_plotline_tool.go
 ```
 
-### PlotlineRevisionWorkflowInput（修改工作流输入）
-
-```go
-type PlotlineRevisionWorkflowInput struct {
-    NovelID        uint   // 小说ID（必填）
-    UserSuggestion string // 用户的修改建议（必填）
-}
-```
-
-### PlotlineRevisionWorkflowState（修改工作流状态）
-
-```go
-type PlotlineRevisionWorkflowState struct {
-    CurrentNode       string   // 当前节点名称
-    NovelID           uint     // 小说ID
-    NovelName         string   // 小说名称
-    Author            string   // 作者名称
-    Genre             string   // 小说类型
-    Outline           string   // 小说大纲
-    ExistingPlotlines string   // 现有剧情线列表（JSON 格式）
-    UserSuggestion    string   // 用户的修改建议
-    RevisedPlotlines  string   // 优化后的剧情线列表（JSON 格式）
-    SavedPlotlineIDs  []string // 保存到数据库后的剧情线 ID 列表
-    ErrorMsg          string   // 错误信息
-    RetryCount        int      // 当前节点的重试次数
-    MaxRetries        int      // 最大重试次数
-}
-```
-
-### PlotlineItem（剧情线数据结构）
-
-```go
-type PlotlineItem struct {
-    Title        string `json:"title"`         // 剧情线标题
-    Type         string `json:"type"`          // 剧情线类型（main-主线、sub-支线）
-    Description  string `json:"description"`   // 剧情线描述
-    StartChapter int    `json:"start_chapter"` // 起始章节序号
-    EndChapter   int    `json:"end_chapter"`   // 结束章节序号（0 表示未结束）
-}
-```
-
-### PlotlineExtractorOutput（提取器输出）
-
-```go
-type PlotlineExtractorOutput struct {
-    Plotlines []PlotlineItem `json:"plotlines"` // 剧情线列表
-}
-```
-
-## 使用示例
-
-### 提取剧情线
-
-```go
-// 1. 创建提取工作流
-graph, err := compose.NewPlotlineExtractWorkflow(ctx, chatModel, db)
-if err != nil {
-    return err
-}
-
-// 2. 准备输入
-input := &compose.PlotlineExtractWorkflowInput{
-    NovelID: 1,
-}
-
-// 3. 执行工作流
-result, err := compose.ExecutePlotlineExtractWorkflow(ctx, graph, input)
-if err != nil {
-    return err
-}
-
-// 4. 获取结果
-fmt.Printf("提取的剧情线数量: %d\n", len(result.SavedPlotlineIDs))
-fmt.Printf("剧情线ID列表: %v\n", result.SavedPlotlineIDs)
-```
-
-### 修改剧情线
-
-```go
-// 1. 创建修改工作流
-graph, err := compose.NewPlotlineRevisionWorkflow(ctx, chatModel, db, plotlineRepo)
-if err != nil {
-    return err
-}
-
-// 2. 准备输入
-input := &compose.PlotlineRevisionWorkflowInput{
-    NovelID:        1,
-    UserSuggestion: "增加一条关于主角寻找神器的支线剧情",
-}
-
-// 3. 执行工作流
-result, err := compose.ExecutePlotlineRevisionWorkflow(ctx, graph, input)
-if err != nil {
-    return err
-}
-
-// 4. 获取结果
-fmt.Printf("保存的剧情线数量: %d\n", len(result.SavedPlotlineIDs))
-```
-
-## 特性
-
-### 1. 断点续传
-
-提取节点支持断点续传。如果文件已存在，直接加载而不重新提取：
-
-```go
-// 尝试从文件加载（断点续传）
-existingContent, err := utils.LoadFromFile(filePath)
-if existingContent != "" {
-    state.ExtractedPlotlines = existingContent
-    state.CurrentNode = "extract_success"
-    return state, nil
-}
-```
-
-### 2. 自动重试机制
-
-每个节点失败后自动重试 3 次：
-
-```go
-if state.RetryCount >= state.MaxRetries {
-    return compose.END, fmt.Errorf("提取失败: %s", state.ErrorMsg)
-}
-state.RetryCount++
-return "extract", nil  // 重试当前节点
-```
-
-### 3. 强制 JSON 输出
-
-使用 MessageJSONParser 强制 JSON 输出，确保数据格式正确：
-
-```go
-parserConfig := &schema.MessageJSONParseConfig{
-    ParseFrom: schema.MessageParseFromContent,
-}
-parser := schema.NewMessageJSONParser[PlotlineExtractorOutput](parserConfig)
-output, err := parser.Parse(ctx, lastMessage)
-```
-
-### 4. 文件持久化
-
-每个阶段的输出都保存到文件系统：
-
-```
-data/content/{novelID-novelName}/plotline/
-├── 提取.json    # 提取阶段的输出
-└── 修改.json    # 修改阶段的输出
-```
-
-### 5. 批量数据库操作
-
-支持批量插入和更新剧情线，提高性能：
-
-```go
-// 批量插入新剧情线
-if len(newPlotlines) > 0 {
-    err := plotlineRepo.BatchCreate(ctx, newPlotlines)
-}
-
-// 批量更新现有剧情线
-for _, plotline := range existingPlotlines {
-    err := plotlineRepo.Update(ctx, &plotline)
-}
-```
-
-## 路由逻辑
-
-工作流使用条件分支实现自动重试和状态转移：
-
-```go
-// 提取节点后的路由
-func routeAfterExtract(ctx context.Context, state *PlotlineExtractWorkflowState) (string, error) {
-    if state.CurrentNode == "extract_success" {
-        return "saveToDB", nil  // 成功，进入下一步
-    }
-    if state.RetryCount >= state.MaxRetries {
-        return compose.END, fmt.Errorf("提取失败: %s", state.ErrorMsg)
-    }
-    state.RetryCount++
-    return "extract", nil  // 重试
-}
-```
-
-## 数据库模型
-
-剧情线在数据库中的存储结构（参考 `internal/model/plotline.go`）：
-
-```go
-type Plotline struct {
-    ID           string         // 剧情线唯一标识（UUID）
-    NovelID      string         // 所属小说 ID
-    Title        string         // 剧情线标题
-    Type         string         // 剧情线类型（main-主线、sub-支线）
-    Description  string         // 剧情线描述
-    StartChapter int            // 起始章节序号
-    EndChapter   int            // 结束章节序号（0 表示未结束）
-    CharacterIDs StringArray    // 关联的角色ID列表
-    CreatedAt    time.Time      // 创建时间
-    UpdatedAt    time.Time      // 更新时间
-    DeletedAt    gorm.DeletedAt // 软删除时间
-}
-```
-
-## 依赖关系
-
-- **Cloudwego Eino**：Agent 和 Workflow 编排框架
-- **GORM**：数据库 ORM
-- **internal/utils**：通用工具函数（ChatModel、文件操作等）
-- **internal/model**：数据模型定义
-
-## 测试
-
-模块包含完整的单元测试：
-
-```bash
-# 运行所有测试
-go test ./internal/plotline/... -v
-
-# 运行特定测试
-go test ./internal/plotline/compose -v -run TestPlotlineExtractWorkflow
-```
-
-## 注意事项
-
-1. **前置条件**：提取剧情线前，必须先生成小说大纲（Outline 模块）
-2. **JSON 格式**：所有剧情线数据使用严格的 JSON 格式，确保数据一致性
-3. **章节序号**：`start_chapter` 和 `end_chapter` 必须是正整数，0 表示未结束
-4. **剧情线类型**：只支持 `main`（主线）和 `sub`（支线）两种类型
-5. **文件路径**：所有文件操作使用绝对路径，确保跨平台兼容性
-6. **重试策略**：默认重试 3 次，可通过 `MaxRetries` 字段调整
-
-## 扩展指南
-
-### 添加新的剧情线类型
-
-1. 在 `model.Plotline` 中扩展 `Type` 字段的枚举值
-2. 更新 `prompts/plotline_extractor_prompt.go` 中的提示词
-3. 更新数据库迁移脚本
-
-### 自定义剧情线字段
-
-1. 在 `PlotlineItem` 结构体中添加新字段
-2. 更新提取提示词，要求 AI 输出新字段
-3. 更新数据库模型和迁移脚本
-4. 更新仓储层的 CRUD 操作
-
-### 添加剧情线关系
-
-剧情线可以关联角色（通过 `CharacterIDs` 字段）：
-
-```go
-// 在修改工作流中关联角色
-plotline.CharacterIDs = []string{"character-uuid-1", "character-uuid-2"}
-```
-
-## 工作流执行示例
-
-### 完整的剧情线提取流程
-
-```go
-package main
-
-import (
-    "context"
-    "fmt"
-    "waku/internal/plotline/compose"
-    "waku/internal/utils"
-)
-
-func main() {
-    ctx := context.Background()
-
-    // 1. 初始化 ChatModel
-    chatModel, err := utils.NewChatModel(ctx, config)
-    if err != nil {
-        panic(err)
-    }
-
-    // 2. 创建工作流
-    graph, err := compose.NewPlotlineExtractWorkflow(ctx, chatModel, db)
-    if err != nil {
-        panic(err)
-    }
-
-    // 3. 执行工作流
-    input := &compose.PlotlineExtractWorkflowInput{
-        NovelID: 1,
-    }
-
-    result, err := compose.ExecutePlotlineExtractWorkflow(ctx, graph, input)
-    if err != nil {
-        panic(err)
-    }
-
-    // 4. 输出结果
-    fmt.Printf("✅ 提取完成\n")
-    fmt.Printf("小说ID: %d\n", result.NovelID)
-    fmt.Printf("小说名称: %s\n", result.NovelName)
-    fmt.Printf("提取的剧情线数量: %d\n", len(result.SavedPlotlineIDs))
-    fmt.Printf("剧情线ID列表: %v\n", result.SavedPlotlineIDs)
-}
-```
-
-## 相关模块
-
-- **Outline 模块**：生成小说大纲（剧情线提取的前置条件）
-- **Character 模块**：提取人物信息（可与剧情线关联）
-- **Novel 模块**：小说数据管理
-
-## 常见问题
-
-### 1. 提取的剧情线数量不符合预期？
-
-检查大纲内容是否足够详细。如果大纲过于简单，AI 可能无法提取足够的剧情线。建议先使用 Outline 模块的扩写和润色功能优化大纲。
-
-### 2. JSON 解析失败？
-
-确保 AI 模型输出的是有效的 JSON 格式。如果持续失败，可以检查 `data/content/{novelID-novelName}/plotline/提取.json` 文件内容，手动修正后重新运行。
-
-### 3. 如何删除剧情线？
-
-使用修改工作流，在用户建议中明确说明要删除的剧情线。AI 会在输出中省略该剧情线，系统会自动从数据库中删除。
-
-### 4. 章节序号如何确定？
-
-AI 会根据大纲中的章节信息自动推断。如果大纲中没有明确的章节划分，可能需要手动调整。
-
-## 性能优化
-
-1. **批量操作**：使用 `BatchCreate` 批量插入剧情线，减少数据库交互次数
-2. **断点续传**：利用文件缓存，避免重复提取
-3. **并发处理**：多个小说的剧情线提取可以并发执行
-4. **索引优化**：在 `novel_id` 字段上建立索引，加速查询
-
-## 未来规划
-
-- [ ] 支持剧情线之间的依赖关系
-- [ ] 支持剧情线的时间线可视化
-- [ ] 支持剧情线的冲突检测
-- [ ] 支持剧情线的自动补全
-- [ ] 支持剧情线的版本管理
+## 说明
+
+- 原有 `plotline_extractor` 与独立 `plotline_revision` 工作流最终会统一收敛为一个剧情线工作流
+- 原有面向大纲冲突和剧情线互相冲突的零散节点能力，会并入 `review` 和 `revise` 的统一语义
+- 旧阶段文件如果仍是历史结构，工作流应尽量兼容读取；新的 Agent 输出必须满足统一 JSON 契约

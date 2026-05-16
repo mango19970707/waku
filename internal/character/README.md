@@ -1,112 +1,267 @@
-# Character 模块 - 小说人物提取优化工作流
+# Character 模块
 
 ## 概述
 
-Character 模块是 Waku 项目中负责小说人物信息提取和优化的核心模块。通过 AI Agent 和工作流编排，实现从小说大纲中自动提取人物信息、根据用户建议修改人物等功能。
+Character 模块负责小说角色的提取、润色、审核和修改。当前实现参考 `internal/plotline` 的统一工作流架构，已经删除旧的“角色提取工作流 / 角色修改工作流”双轨实现，收敛为一个统一的角色工作流，并围绕 4 个 Agent 展开：
 
-## 目录结构
+- 角色提取 Agent：从小说大纲和已有角色上下文中提取或补全角色集合
+- 角色润色 Agent：优化角色设定表达、信息完整性和人物辨识度
+- 角色审核 Agent：审查角色设定是否与大纲、关系和用户建议冲突
+- 角色修改 Agent：根据审核结果和用户建议输出最终角色集合
 
-```
-internal/character/
-├── agents/                                    # Agent 实现层（2个Agent）
-│   ├── character_extractor_agent.go           # 人物提取 Agent
-│   └── character_revision_agent.go            # 人物优化 Agent
-├── compose/                                   # 工作流编排层
-│   ├── character_extract_workflow.go          # 人物提取工作流
-│   ├── character_revision_workflow.go         # 人物修改工作流
-│   ├── nodes.go                               # 工作流节点实现
-│   ├── router.go                              # 工作流路由逻辑
-│   └── agent_executor.go                      # Agent 执行器（工厂模式）
-├── prompts/                                   # 提示词层（2个提示词）
-│   ├── character_extractor_prompt.go          # 提取提示词
-│   └── character_revision_prompt.go           # 优化提示词
-└── repository/                                # 数据仓储层
-    ├── character_repository.go                # 人物数据访问
-    └── repository.go                          # 仓储接口定义
+## 输入契约
+
+统一工作流输入结构：
+
+```json
+{
+  "novel_id": 1,
+  "character_id": 2,
+  "user_suggestion": "强化反派压迫感"
+}
 ```
 
-## 核心功能
+约束如下：
 
-### 1. 人物提取（CharacterExtractorAgent）
+- `novel_id` 为必填，类型为 `uint`
+- `character_id` 为可选，类型为 `uint`
+- `user_suggestion` 为可选，类型为 `string`
+- 当输入只有 `novel_id` 时，走完整工作流
+- 当输入同时具备 `novel_id`、`character_id`、`user_suggestion` 时，从 `init` 直接跳到 `polish`
 
-从小说大纲中自动提取所有重要人物的详细信息。
+对应代码结构：
 
-**提取字段：**
-- `name`：人物姓名
-- `role`：角色定位（protagonist/supporting/antagonist/mentor/love_interest）
-- `age`：年龄（选填）
-- `gender`：性别（选填）
-- `appearance`：外貌描述（100-500字）
-- `personality`：性格特征（100-500字）
-- `background`：背景故事（200-800字）
+```go
+type CharacterWorkflowInput struct {
+    NovelID        uint
+    CharacterID    uint
+    UserSuggestion string
+}
+```
 
-**输出格式：** JSON
+## 输出契约
 
-### 2. 人物优化（CharacterRevisionAgent）
+所有角色 Agent 的输出都必须是统一 JSON，顶层只允许 `characters`：
 
-根据用户建议对人物信息进行修改、删除和新增。
+```json
+{
+  "characters": [
+    {
+      "id": 2,
+      "novel_id": 1,
+      "name": "沈夜",
+      "role": "antagonist",
+      "age": 28,
+      "gender": "男",
+      "appearance": "身形清瘦，常着玄色长袍，目光阴冷。",
+      "personality": "隐忍、多疑、掌控欲强。",
+      "background": "出身没落世家，为振兴家族不择手段。",
+      "plotline_ids": [1, 3],
+      "relationships": {
+        "1": "与主角敌对",
+        "4": "与宗门长老互相利用"
+      }
+    }
+  ]
+}
+```
 
-**支持操作：**
-- **修改现有人物**：保留原有 ID，修改部分或全部字段
-- **删除人物**：直接在输出中省略该人物
-- **新增人物**：ID 设置为空字符串，系统自动生成 UUID
+约束如下：
+
+- 顶层字段只能是 `characters`
+- `characters` 必须是数组，且不能为空
+- 每个角色对象最终要能映射到 [character.go]的 `model.Character`
+- 至少应包含 `name`、`personality`、`background`
+- 已有角色在修改流程中必须保留原有 `id`
+- 新增角色可以省略 `id`，保存时由数据库自增生成
+- `novel_id` 在保存阶段统一写入当前工作流的 `NovelID`
+- `plotline_ids` 对应 `model.UintArray`
+- `relationships` 对应 `model.RelationshipMap`，键为字符串形式的角色 ID，值为关系描述
+- `created_at`、`updated_at` 不要求 Agent 输出，保存层自动维护
+- `deleted_at` 不出现在 Agent 输出中
+
+## 数据模型
+
+当前角色模型核心字段如下：
+
+```go
+type Character struct {
+    ID            uint
+    NovelID       uint
+    Name          string
+    Role          string
+    Age           int
+    Gender        string
+    Appearance    string
+    Personality   string
+    Background    string
+    PlotlineIDs   UintArray
+    Relationships RelationshipMap
+    CreatedAt     time.Time
+    UpdatedAt     time.Time
+}
+```
 
 ## 工作流
 
-### 人物提取工作流（CharacterExtractWorkflow）
+当前统一角色工作流保留两种模式。
 
-**流程图：**
+### 完整工作流模式
 
-```
-START → init → extract → saveToDB → END
-         ↓       ↓         ↓
-      初始化   提取      保存
-      (1步)  (3重试)   (3重试)
-```
+触发条件：只有 `NovelID`
 
-**节点说明：**
+执行流程：
 
-1. **initNode**：初始化工作流状态
-   - 从数据库加载小说信息
-   - 验证大纲是否存在
-   - 初始化工作流状态
-
-2. **extractNode**：提取人物信息
-   - 支持断点续传（从文件加载已有内容）
-   - 调用 CharacterExtractorAgent 执行提取
-   - 保存到 `data/content/{novelID-novelName}/character/提取.json`
-   - 失败自动重试 3 次
-
-3. **saveToDBNode**：保存到数据库
-   - 解析 JSON 数据
-   - 转换为 `model.Character` 对象
-   - 批量插入到数据库
-   - 收集保存后的 ID 列表
-
-### 人物修改工作流（CharacterRevisionWorkflow）
-
-**流程图：**
-
-```
-START → init → revise → saveOrUpdateDB → END
-         ↓       ↓           ↓
-      加载    优化        保存/更新
-      (从DB) (3重试)     (3重试)
+```text
+START -> init -> extract -> polish -> review -> revise -> saveToDB -> END
 ```
 
-**节点说明：**
+### 快速修改模式
 
-1. **initRevisionNode**：初始化修改工作流
-   - 从数据库加载小说信息
-   - 查询该小说的所有人物
-   - 将人物转换为 JSON 格式
+触发条件：`NovelID + CharacterID + UserSuggestion`
 
-2. **reviseNode**：优化人物信息
-   - 调用 CharacterRevisionAgent 执行优化
-   - 保存到 `data/content/{novelID-novelName}/character/修改.json`
-   - 失败自动重试 3 次
+执行流程：
 
-3. **saveOrUpdateDBNode**：保存或更新到数据库
-   - 解析 JSON 数据
-   - 分类处理：有 ID 的更新，无 ID 的新增
-   - 批量执行更新和插入操作
+```text
+START -> init -> polish -> review -> revise -> saveToDB -> END
+```
+
+## 节点语义
+
+### init
+
+- 加载 `model.Novel`
+- 加载当前小说已有角色集合
+- 若提供 `CharacterID`，校验目标角色存在且属于当前小说
+- 初始化工作流状态
+
+### extract
+
+- 调用角色提取 Agent
+- 输入为大纲、类型和已有角色上下文
+- 输出统一 `characters` JSON
+- 支持阶段文件读取，避免重复生成
+
+### polish
+
+- 调用角色润色 Agent
+- 完整模式下基于提取结果润色
+- 快速修改模式下基于已有角色集合和 `user_suggestion` 润色
+
+### review
+
+- 调用角色审核 Agent
+- 输出仍然是统一 `characters` JSON
+- 当前实现不单独保存“问题列表”结构
+
+### revise
+
+- 调用角色修改 Agent
+- 基于审核后的角色数据和用户建议输出最终角色集合
+
+### saveToDB
+
+- 对最终角色 JSON 做统一校验
+- 有 `id` 的角色执行更新
+- 无 `id` 的角色执行创建
+- 数据库中已存在但不在最终结果里的角色会被删除
+
+## 路由规则
+
+当前路由逻辑与代码一致：
+
+```go
+func routeAfterInit(ctx context.Context, state *CharacterWorkflowState) (string, error) {
+    if state.CharacterID > 0 && state.UserSuggestion != "" {
+        return "polish", nil
+    }
+    if state.NovelID > 0 {
+        return "extract", nil
+    }
+    return compose.END, fmt.Errorf("输入参数不足，无法确定角色工作流模式")
+}
+```
+
+其余节点统一使用“成功进入下一节点，失败按最大重试次数重试当前节点”的语义。
+
+## 阶段文件
+
+阶段文件保存在：
+
+```text
+data/content/{author}/{novelName}/character/
+├── 提取.json
+├── 润色.json
+├── 审核.json
+└── 修改.json
+```
+
+文件结构：
+
+```json
+{
+  "content": "{...characters json...}",
+  "stage": "提取",
+  "file_type": "character"
+}
+```
+
+## 目录结构
+
+当前实际目录结构：
+
+```text
+internal/character/
+├── README.md
+├── charater_test.go
+├── agents/
+│   ├── common.go
+│   ├── character_extractor_agent.go
+│   ├── character_polisher_agent.go
+│   ├── character_reviewer_agent.go
+│   └── character_reviser_agent.go
+├── compose/
+│   ├── agent_executor.go
+│   ├── character_workflow.go
+│   ├── character_workflow_test.go
+│   ├── nodes.go
+│   └── router.go
+├── contracts/
+│   └── character_payload.go
+├── prompts/
+│   ├── character_extractor_prompt.go
+│   ├── character_polisher_prompt.go
+│   ├── character_reviewer_prompt.go
+│   └── character_reviser_prompt.go
+└── repository/
+    ├── character_repository.go
+    └── repository.go
+```
+
+## 仓储接口
+
+小说仓储接口：
+
+- `Create(*model.Novel) error`
+- `GetByID(id uint) (*model.Novel, error)`
+
+角色仓储接口：
+
+- `CreateBatch(characters []*model.Character) error`
+- `GetByNovelID(novelID uint) ([]*model.Character, error)`
+- `GetByID(id uint) (*model.Character, error)`
+- `Update(character *model.Character) error`
+- `Delete(id uint) error`
+- `DeleteByNovelID(novelID uint) error`
+
+## 测试
+
+统一工作流测试位于：
+
+- [character_workflow_test.go]
+
+当前覆盖两个核心场景：
+
+- 完整工作流模式
+- 快速修改模式
+

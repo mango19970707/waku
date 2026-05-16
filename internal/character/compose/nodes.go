@@ -6,491 +6,431 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
+	"waku/internal/character/contracts"
+	"waku/internal/character/repository"
+	"waku/internal/constant"
+	"waku/internal/model"
 
 	einoModel "github.com/cloudwego/eino/components/model"
-
-	"waku/internal/character/agents"
-	"waku/internal/character/repository"
-	"waku/internal/model"
 )
 
-// NovelRepository Novel 仓储接口（用于查询小说信息）
-type NovelRepository interface {
-	GetByID(id uint) (*model.Novel, error)
+type characterFilePayload struct {
+	Content  string `json:"content"`
+	Stage    string `json:"stage"`
+	FileType string `json:"file_type"`
 }
 
-// ==================== 人物提取工作流节点 ====================
+func initNode(novelRepo repository.Repository, characterRepo repository.CharacterRepository) func(context.Context, *CharacterWorkflowInput) (*CharacterWorkflowState, error) {
+	return func(ctx context.Context, input *CharacterWorkflowInput) (*CharacterWorkflowState, error) {
+		state := newWorkflowState(input)
 
-// initExtractNode 初始化提取工作流节点
-//
-// 参数：
-//   - novelRepo: Novel 仓储接口
-//
-// 返回：
-//   - func: 节点处理函数
-func initExtractNode(novelRepo NovelRepository) func(context.Context, *CharacterExtractWorkflowInput) (*CharacterExtractWorkflowState, error) {
-	return func(ctx context.Context, input *CharacterExtractWorkflowInput) (*CharacterExtractWorkflowState, error) {
-		fmt.Println("\n========== 初始化人物提取工作流 ==========")
-
-		// 查询小说信息
 		novel, err := novelRepo.GetByID(input.NovelID)
 		if err != nil {
-			return nil, fmt.Errorf("查询小说失败: %w", err)
+			return nil, fmt.Errorf("加载小说失败: %w", err)
 		}
 
-		// 验证大纲是否存在
-		if novel.Outline == "" {
-			return nil, fmt.Errorf("小说大纲为空，无法提取人物")
-		}
+		state.NovelName = novel.Title
+		state.Author = novel.Author
+		state.Genre = novel.Genre
+		state.Outline = extractOutlineContent(novel.Outline)
 
-		// 初始化工作流状态
-		state := &CharacterExtractWorkflowState{
-			CurrentNode:        "init",
-			NovelID:            input.NovelID,
-			NovelName:          novel.Title,
-			Author:             novel.Author,
-			Genre:              novel.Genre,
-			Outline:            novel.Outline,
-			ExtractedCharacters: "",
-			SavedCharacterIDs:  []string{},
-			ErrorMsg:           "",
-			RetryCount:         0,
-			MaxRetries:         3,
+		existingCharacters, err := loadCharactersFromDB(characterRepo, novel.ID)
+		if err != nil {
+			return nil, err
 		}
+		state.ExistingCharacters = existingCharacters
 
-		fmt.Printf("小说ID: %d\n", state.NovelID)
-		fmt.Printf("小说名称: %s\n", state.NovelName)
-		fmt.Printf("小说类型: %s\n", state.Genre)
-		fmt.Printf("大纲长度: %d 字\n", len(state.Outline))
+		if input.CharacterID > 0 {
+			character, err := characterRepo.GetByID(input.CharacterID)
+			if err != nil {
+				return nil, fmt.Errorf("加载目标角色失败: %w", err)
+			}
+			if character.NovelID != input.NovelID {
+				return nil, fmt.Errorf("角色 %d 不属于小说 %d", input.CharacterID, input.NovelID)
+			}
+		}
 
 		return state, nil
 	}
 }
 
-// extractNode 人物提取节点
-//
-// 参数：
-//   - ctx: 上下文对象
-//   - chatModel: 聊天模型
-//
-// 返回：
-//   - func: 节点处理函数
-func extractNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *CharacterExtractWorkflowState) (*CharacterExtractWorkflowState, error) {
-	return func(ctx context.Context, state *CharacterExtractWorkflowState) (*CharacterExtractWorkflowState, error) {
-		fmt.Println("\n========== 提取人物信息 ==========")
+func extractNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+		if state.ExtractedCharacters != "" {
+			state.CurrentNode = "extract_success"
+			return state, nil
+		}
 
-		// 构建文件路径
-		filePath := filepath.Join("data", "content", fmt.Sprintf("%d-%s", state.NovelID, state.NovelName), "character", "提取.json")
+		content, err := loadStageFile(state.Author, state.NovelName, constant.StageExtract)
+		if err != nil {
+			state.CurrentNode = "extract_failed"
+			state.ErrorMsg = fmt.Sprintf("加载提取阶段文件失败: %v", err)
+			return state, nil
+		}
+		if content != "" {
+			normalized, _, err := contracts.NormalizeCharacterPayload(content)
+			if err != nil {
+				state.CurrentNode = "extract_failed"
+				state.ErrorMsg = fmt.Sprintf("解析提取阶段数据失败: %v", err)
+				return state, nil
+			}
+			state.ExtractedCharacters = normalized
+			state.CurrentNode = "extract_success"
+			state.RetryCount = 0
+			return state, nil
+		}
 
-		// 尝试从文件加载（断点续传）
-		if state.ExtractedCharacters == "" {
-			if existingContent, err := loadFromFile(filePath); err == nil && existingContent != "" {
-				fmt.Println("检测到已有提取结果，使用断点续传...")
-				state.ExtractedCharacters = existingContent
-				state.CurrentNode = "extract_success"
+		extracted, err := agentExecutor.ExtractCharacters(ctx, chatModel, state.Outline, state.Genre, state.ExistingCharacters)
+		if err != nil {
+			state.CurrentNode = "extract_failed"
+			state.ErrorMsg = err.Error()
+			return state, nil
+		}
+
+		state.ExtractedCharacters = extracted
+		if err := saveStageFile(state.Author, state.NovelName, constant.StageExtract, extracted); err != nil {
+			state.CurrentNode = "extract_failed"
+			state.ErrorMsg = fmt.Sprintf("保存提取阶段文件失败: %v", err)
+			return state, nil
+		}
+
+		state.CurrentNode = "extract_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+		if state.PolishedCharacters != "" {
+			state.CurrentNode = "polish_success"
+			return state, nil
+		}
+
+		content, err := loadStageFile(state.Author, state.NovelName, constant.StagePolish)
+		if err != nil {
+			state.CurrentNode = "polish_failed"
+			state.ErrorMsg = fmt.Sprintf("加载润色阶段文件失败: %v", err)
+			return state, nil
+		}
+		if content != "" {
+			normalized, _, err := contracts.NormalizeCharacterPayload(content)
+			if err != nil {
+				state.CurrentNode = "polish_failed"
+				state.ErrorMsg = fmt.Sprintf("解析润色阶段数据失败: %v", err)
+				return state, nil
+			}
+			state.PolishedCharacters = normalized
+			state.CurrentNode = "polish_success"
+			state.RetryCount = 0
+			return state, nil
+		}
+
+		source := state.ExtractedCharacters
+		if source == "" {
+			source = state.ExistingCharacters
+		}
+		if source == "" {
+			state.CurrentNode = "polish_failed"
+			state.ErrorMsg = "缺少待润色的角色数据"
+			return state, nil
+		}
+
+		polished, err := agentExecutor.PolishCharacters(ctx, chatModel, state.Outline, state.Genre, source, state.UserSuggestion)
+		if err != nil {
+			state.CurrentNode = "polish_failed"
+			state.ErrorMsg = err.Error()
+			return state, nil
+		}
+
+		state.PolishedCharacters = polished
+		if err := saveStageFile(state.Author, state.NovelName, constant.StagePolish, polished); err != nil {
+			state.CurrentNode = "polish_failed"
+			state.ErrorMsg = fmt.Sprintf("保存润色阶段文件失败: %v", err)
+			return state, nil
+		}
+
+		state.CurrentNode = "polish_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+		if state.ReviewedCharacters != "" {
+			state.CurrentNode = "review_success"
+			return state, nil
+		}
+
+		content, err := loadStageFile(state.Author, state.NovelName, constant.StageReview)
+		if err != nil {
+			state.CurrentNode = "review_failed"
+			state.ErrorMsg = fmt.Sprintf("加载审核阶段文件失败: %v", err)
+			return state, nil
+		}
+		if content != "" {
+			normalized, _, err := contracts.NormalizeCharacterPayload(content)
+			if err != nil {
+				state.CurrentNode = "review_failed"
+				state.ErrorMsg = fmt.Sprintf("解析审核阶段数据失败: %v", err)
+				return state, nil
+			}
+			state.ReviewedCharacters = normalized
+			state.CurrentNode = "review_success"
+			state.RetryCount = 0
+			return state, nil
+		}
+
+		reviewed, err := agentExecutor.ReviewCharacters(ctx, chatModel, state.Outline, state.Genre, state.PolishedCharacters, state.UserSuggestion)
+		if err != nil {
+			state.CurrentNode = "review_failed"
+			state.ErrorMsg = err.Error()
+			return state, nil
+		}
+
+		state.ReviewedCharacters = reviewed
+		if err := saveStageFile(state.Author, state.NovelName, constant.StageReview, reviewed); err != nil {
+			state.CurrentNode = "review_failed"
+			state.ErrorMsg = fmt.Sprintf("保存审核阶段文件失败: %v", err)
+			return state, nil
+		}
+
+		state.CurrentNode = "review_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+		if state.RevisedCharacters != "" {
+			state.CurrentNode = "revise_success"
+			return state, nil
+		}
+
+		content, err := loadStageFile(state.Author, state.NovelName, constant.StageRevise)
+		if err != nil {
+			state.CurrentNode = "revise_failed"
+			state.ErrorMsg = fmt.Sprintf("加载修改阶段文件失败: %v", err)
+			return state, nil
+		}
+		if content != "" {
+			normalized, _, err := contracts.NormalizeCharacterPayload(content)
+			if err != nil {
+				state.CurrentNode = "revise_failed"
+				state.ErrorMsg = fmt.Sprintf("解析修改阶段数据失败: %v", err)
+				return state, nil
+			}
+			state.RevisedCharacters = normalized
+			state.CurrentNode = "revise_success"
+			state.RetryCount = 0
+			return state, nil
+		}
+
+		revised, err := agentExecutor.ReviseCharacters(ctx, chatModel, state.Outline, state.Genre, state.ReviewedCharacters, state.UserSuggestion)
+		if err != nil {
+			state.CurrentNode = "revise_failed"
+			state.ErrorMsg = err.Error()
+			return state, nil
+		}
+
+		state.RevisedCharacters = revised
+		if err := saveStageFile(state.Author, state.NovelName, constant.StageRevise, revised); err != nil {
+			state.CurrentNode = "revise_failed"
+			state.ErrorMsg = fmt.Sprintf("保存修改阶段文件失败: %v", err)
+			return state, nil
+		}
+
+		state.CurrentNode = "revise_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+func saveToDBNode(characterRepo repository.CharacterRepository) func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+		if len(state.SavedCharacterIDs) > 0 {
+			state.CurrentNode = "save_success"
+			return state, nil
+		}
+
+		normalized, payload, err := contracts.NormalizeCharacterPayload(state.RevisedCharacters)
+		if err != nil {
+			state.CurrentNode = "save_failed"
+			state.ErrorMsg = fmt.Sprintf("最终角色格式无效: %v", err)
+			return state, nil
+		}
+		state.RevisedCharacters = normalized
+
+		existing, err := characterRepo.GetByNovelID(state.NovelID)
+		if err != nil {
+			state.CurrentNode = "save_failed"
+			state.ErrorMsg = fmt.Sprintf("加载现有角色失败: %v", err)
+			return state, nil
+		}
+
+		existingByID := make(map[uint]*model.Character, len(existing))
+		for _, item := range existing {
+			existingByID[item.ID] = item
+		}
+
+		seen := make(map[uint]struct{}, len(payload.Characters))
+		var created []*model.Character
+		savedIDs := make([]uint, 0, len(payload.Characters))
+
+		for _, item := range payload.Characters {
+			characterModel, err := contracts.CharacterMapToModel(item, state.NovelID)
+			if err != nil {
+				state.CurrentNode = "save_failed"
+				state.ErrorMsg = err.Error()
+				return state, nil
+			}
+
+			if characterModel.ID > 0 {
+				existingItem, ok := existingByID[characterModel.ID]
+				if !ok {
+					state.CurrentNode = "save_failed"
+					state.ErrorMsg = fmt.Sprintf("角色不存在: %d", characterModel.ID)
+					return state, nil
+				}
+				existingItem.NovelID = state.NovelID
+				existingItem.Name = characterModel.Name
+				existingItem.Role = characterModel.Role
+				existingItem.Age = characterModel.Age
+				existingItem.Gender = characterModel.Gender
+				existingItem.Appearance = characterModel.Appearance
+				existingItem.Personality = characterModel.Personality
+				existingItem.Background = characterModel.Background
+				existingItem.PlotlineIDs = characterModel.PlotlineIDs
+				existingItem.Relationships = characterModel.Relationships
+				if err := characterRepo.Update(existingItem); err != nil {
+					state.CurrentNode = "save_failed"
+					state.ErrorMsg = fmt.Sprintf("更新角色失败: %v", err)
+					return state, nil
+				}
+				seen[characterModel.ID] = struct{}{}
+				savedIDs = append(savedIDs, characterModel.ID)
+				continue
+			}
+
+			created = append(created, characterModel)
+		}
+
+		if len(created) > 0 {
+			if err := characterRepo.CreateBatch(created); err != nil {
+				state.CurrentNode = "save_failed"
+				state.ErrorMsg = fmt.Sprintf("创建角色失败: %v", err)
+				return state, nil
+			}
+			for _, item := range created {
+				seen[item.ID] = struct{}{}
+				savedIDs = append(savedIDs, item.ID)
+			}
+		}
+
+		for _, item := range existing {
+			if _, ok := seen[item.ID]; ok {
+				continue
+			}
+			if err := characterRepo.Delete(item.ID); err != nil {
+				state.CurrentNode = "save_failed"
+				state.ErrorMsg = fmt.Sprintf("删除旧角色失败: %v", err)
 				return state, nil
 			}
 		}
 
-		// 调用 Agent 执行提取
-		fmt.Println("开始提取人物信息...")
-		executor := GetAgentExecutor()
-		output, err := executor.ExtractCharactersJSON(ctx, chatModel, state.Outline, state.Genre)
-		if err != nil {
-			state.ErrorMsg = err.Error()
-			state.CurrentNode = "extract_failed"
-			return state, fmt.Errorf("提取人物失败: %w", err)
-		}
-
-		// 将结果转换为 JSON 字符串
-		jsonBytes, err := json.MarshalIndent(output, "", "  ")
-		if err != nil {
-			state.ErrorMsg = err.Error()
-			state.CurrentNode = "extract_failed"
-			return state, fmt.Errorf("序列化 JSON 失败: %w", err)
-		}
-
-		state.ExtractedCharacters = string(jsonBytes)
-
-		// 保存到文件（用于断点续传）
-		if err := saveToFile(filePath, state.ExtractedCharacters); err != nil {
-			fmt.Printf("警告：保存文件失败: %v\n", err)
-		}
-
-		state.CurrentNode = "extract_success"
-		state.RetryCount = 0 // 重置重试计数
-		fmt.Printf("提取成功，共提取 %d 个人物\n", len(output.Characters))
-
-		return state, nil
-	}
-}
-
-// saveToDBNode 保存到数据库节点
-//
-// 参数：
-//   - characterRepo: 人物仓储
-//
-// 返回：
-//   - func: 节点处理函数
-func saveToDBNode(characterRepo repository.CharacterRepository) func(context.Context, *CharacterExtractWorkflowState) (*CharacterExtractWorkflowState, error) {
-	return func(ctx context.Context, state *CharacterExtractWorkflowState) (*CharacterExtractWorkflowState, error) {
-		fmt.Println("\n========== 保存人物到数据库 ==========")
-
-		// 解析 JSON 数据
-		var output agents.CharacterExtractorOutput
-		if err := json.Unmarshal([]byte(state.ExtractedCharacters), &output); err != nil {
-			state.ErrorMsg = err.Error()
-			state.CurrentNode = "save_failed"
-			return state, fmt.Errorf("解析 JSON 失败: %w", err)
-		}
-
-		// 转换为 model.Character 对象
-		var characters []*model.Character
-		for _, char := range output.Characters {
-			character := &model.Character{
-				NovelID:       fmt.Sprintf("%d", state.NovelID),
-				Name:          char.Name,
-				Role:          char.Role,
-				Age:           char.Age,
-				Gender:        char.Gender,
-				Appearance:    char.Appearance,
-				Personality:   char.Personality,
-				Background:    char.Background,
-				Relationships: char.Relationships,
-			}
-			characters = append(characters, character)
-		}
-
-		// 批量插入到数据库
-		if err := characterRepo.CreateBatch(characters); err != nil {
-			state.ErrorMsg = err.Error()
-			state.CurrentNode = "save_failed"
-			return state, fmt.Errorf("保存人物失败: %w", err)
-		}
-
-		// 收集保存后的 ID
-		for _, char := range characters {
-			state.SavedCharacterIDs = append(state.SavedCharacterIDs, char.ID)
-		}
-
+		state.SavedCharacterIDs = savedIDs
 		state.CurrentNode = "save_success"
-		state.RetryCount = 0 // 重置重试计数
-		fmt.Printf("保存成功，共保存 %d 个人物\n", len(characters))
-
+		state.RetryCount = 0
 		return state, nil
 	}
 }
 
-// ==================== 人物修改工作流节点 ====================
-
-// initRevisionNode 初始化修改工作流节点
-//
-// 参数：
-//   - novelRepo: Novel 仓储接口
-//   - characterRepo: 人物仓储
-//
-// 返回：
-//   - func: 节点处理函数
-func initRevisionNode(novelRepo NovelRepository, characterRepo repository.CharacterRepository) func(context.Context, *CharacterRevisionWorkflowInput) (*CharacterRevisionWorkflowState, error) {
-	return func(ctx context.Context, input *CharacterRevisionWorkflowInput) (*CharacterRevisionWorkflowState, error) {
-		fmt.Println("\n========== 初始化人物修改工作流 ==========")
-
-		// 查询小说信息
-		novel, err := novelRepo.GetByID(input.NovelID)
-		if err != nil {
-			return nil, fmt.Errorf("查询小说失败: %w", err)
-		}
-
-		// 查询该小说的人物
-		var characters []*model.Character
-
-		if input.CharacterID != "" {
-			// 如果指定了角色ID，只查询该角色
-			character, err := characterRepo.GetByID(input.CharacterID)
-			if err != nil {
-				return nil, fmt.Errorf("查询角色失败: %w", err)
-			}
-			if character == nil {
-				return nil, fmt.Errorf("角色不存在: %s", input.CharacterID)
-			}
-			characters = []*model.Character{character}
-		} else {
-			// 否则查询该小说的所有人物
-			characters, err = characterRepo.GetByNovelID(fmt.Sprintf("%d", input.NovelID))
-			if err != nil {
-				return nil, fmt.Errorf("查询人物失败: %w", err)
-			}
-		}
-
-		if len(characters) == 0 {
-			return nil, fmt.Errorf("该小说没有人物信息，请先执行人物提取")
-		}
-
-		// 将人物转换为 JSON 格式
-		var characterItems []agents.CharacterRevisionItem
-		for _, char := range characters {
-			item := agents.CharacterRevisionItem{
-				ID:            char.ID,
-				Name:          char.Name,
-				Role:          char.Role,
-				Age:           char.Age,
-				Gender:        char.Gender,
-				Appearance:    char.Appearance,
-				Personality:   char.Personality,
-				Background:    char.Background,
-				Relationships: char.Relationships,
-			}
-			characterItems = append(characterItems, item)
-		}
-
-		jsonBytes, err := json.MarshalIndent(map[string]interface{}{
-			"characters": characterItems,
-		}, "", "  ")
-		if err != nil {
-			return nil, fmt.Errorf("序列化 JSON 失败: %w", err)
-		}
-
-		// 初始化工作流状态
-		state := &CharacterRevisionWorkflowState{
-			CurrentNode:        "init",
-			NovelID:            input.NovelID,
-			CharacterID:        input.CharacterID,
-			NovelName:          novel.Title,
-			Author:             novel.Author,
-			Genre:              novel.Genre,
-			Outline:            novel.Outline,
-			ExistingCharacters: string(jsonBytes),
-			UserSuggestion:     input.UserSuggestion,
-			RevisedCharacters:  "",
-			SavedCharacterIDs:  []string{},
-			ErrorMsg:           "",
-			RetryCount:         0,
-			MaxRetries:         3,
-		}
-
-		fmt.Printf("小说ID: %d\n", state.NovelID)
-		fmt.Printf("小说名称: %s\n", state.NovelName)
-		if input.CharacterID != "" {
-			fmt.Printf("指定角色ID: %s\n", state.CharacterID)
-		}
-		fmt.Printf("现有人物数量: %d\n", len(characters))
-		fmt.Printf("用户建议: %s\n", state.UserSuggestion)
-
-		return state, nil
+func loadCharactersFromDB(characterRepo repository.CharacterRepository, novelID uint) (string, error) {
+	characters, err := characterRepo.GetByNovelID(novelID)
+	if err != nil {
+		return "", fmt.Errorf("加载角色失败: %w", err)
 	}
+	if len(characters) == 0 {
+		return "", nil
+	}
+
+	items := make([]map[string]any, 0, len(characters))
+	for _, character := range characters {
+		items = append(items, contracts.CharacterModelToMap(character))
+	}
+
+	payload, _, err := contracts.BuildCharacterPayload(items)
+	if err != nil {
+		return "", fmt.Errorf("构造角色 JSON 失败: %w", err)
+	}
+	return payload, nil
 }
 
-// reviewNode 人物审核节点
-//
-// 参数：
-//   - ctx: 上下文对象
-//   - chatModel: 聊天模型
-//
-// 返回：
-//   - func: 节点处理函数
-func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *CharacterRevisionWorkflowState) (*CharacterRevisionWorkflowState, error) {
-	return func(ctx context.Context, state *CharacterRevisionWorkflowState) (*CharacterRevisionWorkflowState, error) {
-		fmt.Println("\n========== 审核人物信息 ==========")
-
-		// 构建文件路径
-		filePath := filepath.Join("data", "content", fmt.Sprintf("%d-%s", state.NovelID, state.NovelName), "character", "审核.json")
-
-		// 如果指定了角色ID，添加提示信息
-		if state.CharacterID != "" {
-			fmt.Printf("仅审核角色: %s\n", state.CharacterID)
-		}
-
-		// 调用 Agent 执行审核
-		fmt.Println("开始审核人物信息...")
-		executor := GetAgentExecutor()
-		output, err := executor.ReviewCharactersJSON(ctx, chatModel, state.Outline, state.Genre, state.ExistingCharacters)
-		if err != nil {
-			state.ErrorMsg = err.Error()
-			state.CurrentNode = "review_failed"
-			return state, fmt.Errorf("审核人物失败: %w", err)
-		}
-
-		// 将结果转换为 JSON 字符串
-		jsonBytes, err := json.MarshalIndent(output, "", "  ")
-		if err != nil {
-			state.ErrorMsg = err.Error()
-			state.CurrentNode = "review_failed"
-			return state, fmt.Errorf("序列化 JSON 失败: %w", err)
-		}
-
-		state.ReviewSuggestions = string(jsonBytes)
-
-		// 保存到文件
-		if err := saveToFile(filePath, state.ReviewSuggestions); err != nil {
-			fmt.Printf("警告：保存文件失败: %v\n", err)
-		}
-
-		state.CurrentNode = "review_success"
-		state.RetryCount = 0 // 重置重试计数
-		fmt.Printf("审核完成，共 %d 条审核意见\n", len(output.Issues))
-
-		return state, nil
+func extractOutlineContent(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return ""
 	}
+
+	var outlineData map[string]any
+	if err := json.Unmarshal([]byte(raw), &outlineData); err == nil {
+		if outline, ok := outlineData["outline"].(string); ok && strings.TrimSpace(outline) != "" {
+			return outline
+		}
+	}
+	return raw
 }
 
-// reviseNode 人物优化节点
-//
-// 参数：
-//   - ctx: 上下文对象
-//   - chatModel: 聊天模型
-//
-// 返回：
-//   - func: 节点处理函数
-func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *CharacterRevisionWorkflowState) (*CharacterRevisionWorkflowState, error) {
-	return func(ctx context.Context, state *CharacterRevisionWorkflowState) (*CharacterRevisionWorkflowState, error) {
-		fmt.Println("\n========== 优化人物信息 ==========")
-
-		// 构建文件路径
-		filePath := filepath.Join("data", "content", fmt.Sprintf("%d-%s", state.NovelID, state.NovelName), "character", "修改.json")
-
-		// 如果指定了角色ID，添加提示信息
-		if state.CharacterID != "" {
-			fmt.Printf("仅优化角色: %s\n", state.CharacterID)
+func loadStageFile(author, novelName, stage string) (string, error) {
+	filePath := stageFilePath(author, novelName, stage)
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
 		}
-
-		// 合并用户建议和审核意见
-		combinedSuggestion := state.UserSuggestion
-		if state.ReviewSuggestions != "" {
-			combinedSuggestion = fmt.Sprintf("用户建议：\n%s\n\n审核意见：\n%s", state.UserSuggestion, state.ReviewSuggestions)
-		}
-
-		// 调用 Agent 执行优化
-		fmt.Println("开始优化人物信息...")
-		executor := GetAgentExecutor()
-		output, err := executor.ReviseCharactersJSON(ctx, chatModel, state.Outline, state.Genre, state.ExistingCharacters, combinedSuggestion)
-		if err != nil {
-			state.ErrorMsg = err.Error()
-			state.CurrentNode = "revise_failed"
-			return state, fmt.Errorf("优化人物失败: %w", err)
-		}
-
-		// 将结果转换为 JSON 字符串
-		jsonBytes, err := json.MarshalIndent(output, "", "  ")
-		if err != nil {
-			state.ErrorMsg = err.Error()
-			state.CurrentNode = "revise_failed"
-			return state, fmt.Errorf("序列化 JSON 失败: %w", err)
-		}
-
-		state.RevisedCharacters = string(jsonBytes)
-
-		// 保存到文件
-		if err := saveToFile(filePath, state.RevisedCharacters); err != nil {
-			fmt.Printf("警告：保存文件失败: %v\n", err)
-		}
-
-		state.CurrentNode = "revise_success"
-		state.RetryCount = 0 // 重置重试计数
-		fmt.Printf("优化成功，共 %d 个人物\n", len(output.Characters))
-
-		return state, nil
+		return "", fmt.Errorf("读取阶段文件失败: %w", err)
 	}
+
+	var payload characterFilePayload
+	if err := json.Unmarshal(content, &payload); err == nil && payload.Content != "" {
+		return payload.Content, nil
+	}
+	return string(content), nil
 }
 
-// saveOrUpdateDBNode 保存或更新到数据库节点
-//
-// 参数：
-//   - characterRepo: 人物仓储
-//
-// 返回：
-//   - func: 节点处理函数
-func saveOrUpdateDBNode(characterRepo repository.CharacterRepository) func(context.Context, *CharacterRevisionWorkflowState) (*CharacterRevisionWorkflowState, error) {
-	return func(ctx context.Context, state *CharacterRevisionWorkflowState) (*CharacterRevisionWorkflowState, error) {
-		fmt.Println("\n========== 保存/更新人物到数据库 ==========")
-
-		// 解析 JSON 数据
-		var output agents.CharacterRevisionOutput
-		if err := json.Unmarshal([]byte(state.RevisedCharacters), &output); err != nil {
-			state.ErrorMsg = err.Error()
-			state.CurrentNode = "save_failed"
-			return state, fmt.Errorf("解析 JSON 失败: %w", err)
-		}
-
-		// 分类处理：有 ID 的更新，无 ID 的新增
-		var toUpdate []*model.Character
-		var toCreate []*model.Character
-
-		for _, char := range output.Characters {
-			character := &model.Character{
-				ID:            char.ID,
-				NovelID:       fmt.Sprintf("%d", state.NovelID),
-				Name:          char.Name,
-				Role:          char.Role,
-				Age:           char.Age,
-				Gender:        char.Gender,
-				Appearance:    char.Appearance,
-				Personality:   char.Personality,
-				Background:    char.Background,
-				Relationships: char.Relationships,
-			}
-
-			if char.ID != "" {
-				// 有 ID，执行更新
-				toUpdate = append(toUpdate, character)
-			} else {
-				// 无 ID，执行新增
-				toCreate = append(toCreate, character)
-			}
-		}
-
-		// 执行更新
-		for _, char := range toUpdate {
-			if err := characterRepo.Update(char); err != nil {
-				state.ErrorMsg = err.Error()
-				state.CurrentNode = "save_failed"
-				return state, fmt.Errorf("更新人物失败: %w", err)
-			}
-			state.SavedCharacterIDs = append(state.SavedCharacterIDs, char.ID)
-		}
-
-		// 执行新增
-		if len(toCreate) > 0 {
-			if err := characterRepo.CreateBatch(toCreate); err != nil {
-				state.ErrorMsg = err.Error()
-				state.CurrentNode = "save_failed"
-				return state, fmt.Errorf("新增人物失败: %w", err)
-			}
-			for _, char := range toCreate {
-				state.SavedCharacterIDs = append(state.SavedCharacterIDs, char.ID)
-			}
-		}
-
-		state.CurrentNode = "save_success"
-		state.RetryCount = 0 // 重置重试计数
-		fmt.Printf("保存/更新成功，更新 %d 个，新增 %d 个\n", len(toUpdate), len(toCreate))
-
-		return state, nil
-	}
-}
-
-// ==================== 工具函数 ====================
-
-// saveToFile 保存内容到文件
-func saveToFile(filePath, content string) error {
-	// 创建目录
-	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("创建目录失败: %w", err)
+func saveStageFile(author, novelName, stage, content string) error {
+	filePath := stageFilePath(author, novelName, stage)
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		return fmt.Errorf("创建阶段目录失败: %w", err)
 	}
 
-	// 写入文件
-	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
-		return fmt.Errorf("写入文件失败: %w", err)
+	payload := characterFilePayload{
+		Content:  content,
+		Stage:    stage,
+		FileType: "character",
 	}
 
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return fmt.Errorf("序列化阶段文件失败: %w", err)
+	}
+	if err := os.WriteFile(filePath, data, 0o644); err != nil {
+		return fmt.Errorf("写入阶段文件失败: %w", err)
+	}
 	return nil
 }
 
-// loadFromFile 从文件加载内容
-func loadFromFile(filePath string) (string, error) {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return "", err
+func stageFilePath(author, novelName, stage string) string {
+	return filepath.Join(projectRootDir(), "data", "content", author, novelName, "character", stage+".json")
+}
+
+func projectRootDir() string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return "."
 	}
-	return string(data), nil
+	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 }
