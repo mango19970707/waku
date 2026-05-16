@@ -37,11 +37,11 @@ waku/
 │   ├── waku.db                      # SQLite 数据库文件
 │   └── content/                     # 小说内容文件
 │       └── {novelID-novelName}/     # 每个小说的目录
-│           └── abstract/            # 大纲文件
-│               ├── 生成.md
-│               ├── 扩写.md
-│               ├── 润色.md
-│               └── 修改.md
+│           └── abstract/            # 大纲文件（JSON 格式）
+│               ├── 生成.json
+│               ├── 扩写.json
+│               ├── 润色.json
+│               └── 修改.json
 └── internal/                        # 核心业务逻辑
     ├── model/                       # 数据模型（GORM）
     │   ├── types.go                 # 自定义类型（StringArray）
@@ -170,17 +170,17 @@ START → init → generate → expand → polish → extract → saveToDB → E
    - 调用 `OutlineGeneratorAgent`
    - 支持断点续传（从文件加载已有内容）
    - 失败自动重试 3 次
-   - 保存到 `data/content/{name}/abstract/生成.md`
+   - 保存到 `data/content/{name}/abstract/生成.json`
 
 3. **expandNode** - 扩写大纲
    - 调用 `OutlineExpanderAgent`
    - 基于生成的大纲进行扩写
-   - 保存到 `data/content/{name}/abstract/扩写.md`
+   - 保存到 `data/content/{name}/abstract/扩写.json`
 
 4. **polishNode** - 润色大纲
    - 调用 `OutlinePolisherAgent`
    - 优化大纲质量
-   - 保存到 `data/content/{name}/abstract/润色.md`
+   - 保存到 `data/content/{name}/abstract/润色.json`
 
 5. **extractNode** - 提取结构化信息
    - 调用 `OutlineExtractorAgent`
@@ -224,7 +224,7 @@ START → init → revise → extract → update → END
 - 根据用户建议修改大纲
 - 提取修改后的信息
 - 更新数据库
-- 保存到 `data/content/{name}/abstract/修改.md`
+- 保存到 `data/content/{name}/abstract/修改.json`
 
 #### 4. 提示词层 (`internal/novel/prompts/`)
 
@@ -348,6 +348,45 @@ parserConfig := &schema.MessageJSONParseConfig{
 parser := schema.NewMessageJSONParser[OutlineExtractorOutput](parserConfig)
 output, err := parser.Parse(ctx, lastMessage)
 ```
+
+## 文件存储格式
+
+### JSON 文件格式
+
+所有阶段的文件（大纲、剧情线等）都以 JSON 格式保存，便于结构化存储和解析。
+
+**文件路径格式：**
+```
+data/{作者名称}/{文件类型}/{阶段}.json
+```
+
+**JSON 文件结构：**
+```json
+{
+  "content": "实际内容（大纲、剧情线等）",
+  "stage": "阶段名称（生成、扩写、润色、修改等）",
+  "file_type": "文件类型（outline、plotline、volume、chapter）"
+}
+```
+
+**示例：**
+```json
+{
+  "content": "第一章：穿越异界\n主角林凡意外穿越到修仙世界...",
+  "stage": "生成",
+  "file_type": "outline"
+}
+```
+
+**优势：**
+- **结构化存储**：便于添加元数据（阶段、类型、时间戳等）
+- **易于解析**：标准 JSON 格式，支持各种工具和语言
+- **向后兼容**：`LoadFromFile` 函数支持读取旧的纯文本格式
+- **便于扩展**：未来可以添加更多字段（如版本号、作者、创建时间等）
+
+**相关函数：**
+- `utils.SaveToFile()` - 保存内容到 JSON 文件
+- `utils.LoadFromFile()` - 从 JSON 文件加载内容（自动解析）
 
 ## 数据流向
 

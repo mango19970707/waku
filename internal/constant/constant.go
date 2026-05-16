@@ -45,7 +45,7 @@ const (
 	// DataDir 数据根目录
 	DataDir = "../../data"
 	// FileExtension 文件扩展名
-	FileExtension = ".md"
+	FileExtension = ".json"
 )
 
 // 小说状态常量
