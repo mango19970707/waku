@@ -93,7 +93,7 @@ func (r *plotlineRepository) GetByNovelID(novelID string) ([]*model.Plotline, er
 	var plotlines []*model.Plotline
 
 	if err := r.db.Where("novel_id = ?", novelID).
-		Order("type DESC, start_chapter ASC").
+		Order("type DESC, created_at ASC").
 		Find(&plotlines).Error; err != nil {
 		return nil, fmt.Errorf("获取剧情线列表失败: %w", err)
 	}

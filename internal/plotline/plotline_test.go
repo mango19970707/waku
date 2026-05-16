@@ -14,8 +14,8 @@ import (
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
-	_ "modernc.org/sqlite" // 使用纯 Go 的 SQLite 驱动（不需要 CGO）
 	"gorm.io/gorm"
+	_ "modernc.org/sqlite" // 使用纯 Go 的 SQLite 驱动（不需要 CGO）
 )
 
 var (
@@ -40,22 +40,6 @@ func TestPlotlineGenerateWorkflowGraph(t *testing.T) {
 	// 创建测试数据库
 	db := setupTestDBForTools(t)
 
-	// 先创建一个测试小说（包含大纲）
-	testNovel := &model.Novel{
-		Title:   "测试小说",
-		Author:  "测试作者",
-		Genre:   "玄幻",
-		Outline: "完全模仿斗破苍穹的套路，修行体系啥都一样。主角从一个废柴开始，逐步修炼成为强者。",
-		Status:  "draft",
-	}
-	err := db.Create(testNovel).Error
-	require.NoError(t, err, "创建测试小说失败")
-
-	// 清理测试数据
-	defer func() {
-		db.Delete(testNovel)
-	}()
-
 	// 创建 repository
 	novelRepo := plotlineRepo.NewRepository(db)
 	plotlineRepository := plotlineRepo.NewPlotlineRepository(db)
@@ -70,7 +54,7 @@ func TestPlotlineGenerateWorkflowGraph(t *testing.T) {
 
 	// 准备输入（只需要小说ID）
 	input := &compose.PlotlineExtractWorkflowInput{
-		NovelID: testNovel.ID,
+		NovelID: 1,
 	}
 
 	// 执行工作流
@@ -102,8 +86,8 @@ func TestPlotlineRevisionWorkflowGraph(t *testing.T) {
 
 	// 准备输入
 	input := &compose.PlotlineRevisionWorkflowInput{
-		NovelID:        2,
-		UserSuggestion: "完全模仿斗破苍穹的套路，修行体系啥都一样",
+		NovelID:        1,
+		UserSuggestion: "着重突出情感线和成长线",
 	}
 
 	// 执行工作流
@@ -127,6 +111,7 @@ func setupTestDBForTools(t *testing.T) *gorm.DB {
 	require.NoError(t, err, "创建测试数据库失败")
 
 	err = db.AutoMigrate(&model.Novel{})
+	err = db.AutoMigrate(&model.Plotline{})
 	require.NoError(t, err, "迁移表结构失败")
 
 	return db
