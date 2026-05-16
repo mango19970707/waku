@@ -66,7 +66,7 @@ func TestPlotlineGenerateWorkflowGraph(t *testing.T) {
 	t.Log("✓ 完整流程测试通过")
 }
 
-func TestPlotlineRevisionWorkflowGraph(t *testing.T) {
+func TestPlotlineRevisionWorkflowGraph2(t *testing.T) {
 	ctx := context.Background()
 
 	// 创建测试数据库
@@ -77,7 +77,7 @@ func TestPlotlineRevisionWorkflowGraph(t *testing.T) {
 	plotlineRepository := plotlineRepo.NewPlotlineRepository(db)
 
 	// 构建 Graph
-	graph, err := compose.NewPlotlineRevisionWorkflow(ctx, chatModel, novelRepo, plotlineRepository)
+	graph, err := compose.NewPlotlineRevisionWorkflowV2(ctx, chatModel, novelRepo, plotlineRepository)
 	if err != nil {
 		t.Fatalf("构建 Graph 失败: %v", err)
 	}
@@ -87,11 +87,12 @@ func TestPlotlineRevisionWorkflowGraph(t *testing.T) {
 	// 准备输入
 	input := &compose.PlotlineRevisionWorkflowInput{
 		NovelID:        1,
-		UserSuggestion: "着重突出情感线和成长线",
+		PlotlineID:     "4479528e-f16b-433e-a349-a61431ab4294",
+		UserSuggestion: "有2个女主角，彩鳞和熏儿",
 	}
 
 	// 执行工作流
-	_, err = compose.ExecutePlotlineRevisionWorkflow(ctx, graph, input)
+	_, err = compose.ExecutePlotlineRevisionWorkflowV2(ctx, graph, input)
 	if err != nil {
 		t.Fatalf("执行工作流失败: %v", err)
 	}

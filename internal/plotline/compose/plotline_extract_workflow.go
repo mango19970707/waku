@@ -56,6 +56,8 @@ type PlotlineExtractWorkflowState struct {
 type PlotlineRevisionWorkflowInput struct {
 	// NovelID 小说ID（必填）
 	NovelID uint
+	// PlotlineID 剧情线ID（可选，如果提供则只修改该剧情线）
+	PlotlineID string
 	// UserSuggestion 用户的修改建议（必填）
 	UserSuggestion string
 }
@@ -88,6 +90,21 @@ type PlotlineRevisionWorkflowState struct {
 	RetryCount int
 	// MaxRetries 最大重试次数
 	MaxRetries int
+
+	// TargetPlotlineID 目标剧情线ID（如果只修改单个剧情线）
+	TargetPlotlineID string
+	// TargetPlotlineJSON 目标剧情线的 JSON 表示
+	TargetPlotlineJSON string
+	// OtherPlotlinesJSON 其他剧情线的 JSON 表示
+	OtherPlotlinesJSON string
+	// OutlineConflictDetectionResult 与大纲的冲突检测结果（JSON 格式）
+	OutlineConflictDetectionResult string
+	// PlotlinesConflictDetectionResults 与其他剧情线的冲突检测结果数组（JSON 格式，每个元素包含 plotline_id）
+	PlotlinesConflictDetectionResults string
+	// RevisedOutline 修改后的大纲
+	RevisedOutline string
+	// RevisedOtherPlotlines 修改后的其他剧情线（JSON 格式，数组）
+	RevisedOtherPlotlines string
 }
 
 // NewPlotlineExtractWorkflow 创建剧情线提取工作流

@@ -10,6 +10,7 @@ import (
 
 	"waku/internal/constant"
 	"waku/internal/model"
+	"waku/internal/plotline/agents"
 	"waku/internal/plotline/repository"
 	"waku/internal/utils"
 
@@ -488,6 +489,633 @@ func saveOrUpdateDBNode(plotlineRepo repository.PlotlineRepository) func(context
 
 		fmt.Printf("  ✓ 保存成功，剧情线数量: %d\n", len(state.SavedPlotlineIDs))
 		state.CurrentNode = "save_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+// ==================== 冲突检测和解决节点 ====================
+
+// detectConflictNode 冲突检测节点（已废弃，使用 detectOutlineConflictNode 和 detectPlotlinesConflictNode 代替）
+// func detectConflictNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
+// 	return func(ctx context.Context, state *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
+// 		fmt.Printf("\n🤖 [冲突检测] 开始检测冲突...\n")
+// 		...
+// 	}
+// }
+
+// reviseOutlineNode 修改大纲节点
+func reviseOutlineNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
+	return func(ctx context.Context, state *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
+		fmt.Printf("\n🤖 [修改大纲] 开始修改大纲以解决冲突...\n")
+
+		// 如果已经修改过，跳过
+		if state.RevisedOutline != "" {
+			fmt.Printf("  ✓ 已有修改后的大纲，跳过\n")
+			state.CurrentNode = "revise_outline_success"
+			return state, nil
+		}
+
+		// 执行大纲修改
+		revisedOutline, err := agentExecutor.ResolveOutlineConflicts(
+			ctx, chatModel,
+			state.Outline,
+			state.Genre,
+			state.RevisedPlotlines,
+			state.OutlineConflictDetectionResult,
+		)
+
+		if err != nil {
+			state.ErrorMsg = fmt.Sprintf("修改大纲失败: %v", err)
+			state.CurrentNode = "revise_outline_failed"
+			return state, nil
+		}
+
+		// 保存到文件
+		if err := utils.SaveToFile(state.Author, constant.FileTypeOutline, constant.StageRevise, revisedOutline); err != nil {
+			state.ErrorMsg = fmt.Sprintf("保存文件失败: %v", err)
+			state.CurrentNode = "revise_failed"
+			return state, nil
+		}
+
+		state.RevisedOutline = revisedOutline
+		fmt.Printf("  ✓ 大纲修改完成，长度: %d 字符\n", len(revisedOutline))
+		state.CurrentNode = "revise_outline_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+// reviseOtherPlotlinesNode 修改其他剧情线节点（并发修改，最多3个goroutine）
+func reviseOtherPlotlinesNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
+	return func(ctx context.Context, state *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
+		fmt.Printf("\n🤖 [修改其他剧情线] 开始修改其他剧情线以解决冲突...\n")
+
+		// 如果已经修改过，跳过
+		if state.RevisedOtherPlotlines != "" {
+			fmt.Printf("  ✓ 已有修改后的其他剧情线，跳过\n")
+			state.CurrentNode = "revise_other_plotlines_success"
+			return state, nil
+		}
+
+		// 解析冲突检测结果
+		var conflictResults []agents.PlotlinesConflictDetectionOutput
+		if err := json.Unmarshal([]byte(state.PlotlinesConflictDetectionResults), &conflictResults); err != nil {
+			state.ErrorMsg = fmt.Sprintf("解析冲突检测结果失败: %v", err)
+			state.CurrentNode = "revise_other_plotlines_failed"
+			return state, nil
+		}
+
+		// 筛选出有冲突的剧情线
+		type ConflictInfo struct {
+			PlotlineID string
+			Conflicts  []agents.ConflictItem
+		}
+		var conflictInfos []ConflictInfo
+		for _, result := range conflictResults {
+			if result.HasConflict {
+				conflictInfos = append(conflictInfos, ConflictInfo{
+					PlotlineID: result.PlotlineID,
+					Conflicts:  result.Conflicts,
+				})
+			}
+		}
+
+		if len(conflictInfos) == 0 {
+			fmt.Printf("  ✓ 没有需要修改的剧情线\n")
+			state.CurrentNode = "revise_other_plotlines_success"
+			return state, nil
+		}
+
+		fmt.Printf("  → 开始并发修改 %d 条有冲突的剧情线（最多同时3个goroutine）\n", len(conflictInfos))
+
+		// 解析其他剧情线列表
+		type PlotlineJSON struct {
+			ID          string `json:"id"`
+			Title       string `json:"title"`
+			Type        string `json:"type"`
+			Description string `json:"description"`
+		}
+		type PlotlinesWrapper struct {
+			Plotlines []PlotlineJSON `json:"plotlines"`
+		}
+		var wrapper PlotlinesWrapper
+		if err := json.Unmarshal([]byte(state.OtherPlotlinesJSON), &wrapper); err != nil {
+			state.ErrorMsg = fmt.Sprintf("解析其他剧情线失败: %v", err)
+			state.CurrentNode = "revise_other_plotlines_failed"
+			return state, nil
+		}
+
+		// 创建剧情线ID到剧情线对象的映射
+		plotlineMap := make(map[string]PlotlineJSON)
+		for _, p := range wrapper.Plotlines {
+			plotlineMap[p.ID] = p
+		}
+
+		// 使用 channel 控制并发数量（最多3个）
+		semaphore := make(chan struct{}, 3)
+		resultChan := make(chan *agents.PlotlinesConflictResolverOutput, len(conflictInfos))
+		errorChan := make(chan error, len(conflictInfos))
+
+		// 为每个有冲突的剧情线创建一个goroutine进行修改
+		for _, conflictInfo := range conflictInfos {
+			semaphore <- struct{}{} // 获取信号量
+
+			go func(ci ConflictInfo) {
+				defer func() { <-semaphore }() // 释放信号量
+
+				// 获取剧情线对象
+				plotline, exists := plotlineMap[ci.PlotlineID]
+				if !exists {
+					errorChan <- fmt.Errorf("未找到剧情线: %s", ci.PlotlineID)
+					return
+				}
+
+				// 构建单个剧情线的JSON
+				singlePlotlineJSON, _ := json.Marshal(map[string]interface{}{
+					"id":          plotline.ID,
+					"title":       plotline.Title,
+					"type":        plotline.Type,
+					"description": plotline.Description,
+				})
+
+				// 构建冲突信息JSON
+				conflictsJSON, _ := json.Marshal(ci.Conflicts)
+
+				// 执行剧情线修改
+				output, err := agentExecutor.ResolvePlotlinesConflicts(
+					ctx, chatModel,
+					state.RevisedOutline,
+					state.Genre,
+					state.RevisedPlotlines,
+					string(singlePlotlineJSON),
+					plotline.ID,
+					string(conflictsJSON),
+				)
+
+				if err != nil {
+					errorChan <- fmt.Errorf("修改剧情线 %s 失败: %w", ci.PlotlineID, err)
+					return
+				}
+
+				resultChan <- output
+			}(conflictInfo)
+		}
+
+		// 等待所有goroutine完成
+		var revisedPlotlines []agents.PlotlineRevisionItem
+		var errors []error
+		for i := 0; i < len(conflictInfos); i++ {
+			select {
+			case result := <-resultChan:
+				revisedPlotlines = append(revisedPlotlines, result.Plotline)
+			case err := <-errorChan:
+				errors = append(errors, err)
+			}
+		}
+
+		// 如果有错误，返回第一个错误
+		if len(errors) > 0 {
+			state.ErrorMsg = fmt.Sprintf("修改其他剧情线失败: %v", errors[0])
+			state.CurrentNode = "revise_other_plotlines_failed"
+			return state, nil
+		}
+
+		// 将结果转换为 JSON 字符串
+		jsonBytes, _ := json.MarshalIndent(map[string]interface{}{
+			"plotlines": revisedPlotlines,
+		}, "", "  ")
+		state.RevisedOtherPlotlines = string(jsonBytes)
+
+		fmt.Printf("  ✓ 其他剧情线修改完成，共 %d 条\n", len(revisedPlotlines))
+		state.CurrentNode = "revise_other_plotlines_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+// initRevisionNodeV2 初始化修改工作流节点（支持单个剧情线修改）
+func initRevisionNodeV2(novelRepo repository.Repository, plotlineRepo repository.PlotlineRepository) func(context.Context, *PlotlineRevisionWorkflowInput) (*PlotlineRevisionWorkflowState, error) {
+	return func(ctx context.Context, input *PlotlineRevisionWorkflowInput) (*PlotlineRevisionWorkflowState, error) {
+		fmt.Printf("\n🤖 [初始化] 从数据库加载小说信息和剧情线...\n")
+
+		novel, err := novelRepo.GetByID(input.NovelID)
+		if err != nil {
+			return nil, fmt.Errorf("查询小说失败: %w", err)
+		}
+
+		if novel.Outline == "" {
+			return nil, fmt.Errorf("小说大纲为空，请先生成大纲")
+		}
+
+		plotlines, err := plotlineRepo.GetByNovelID(fmt.Sprintf("%d", novel.ID))
+		if err != nil {
+			return nil, fmt.Errorf("查询剧情线失败: %w", err)
+		}
+
+		if len(plotlines) == 0 {
+			return nil, fmt.Errorf("未找到任何剧情线，请先提取剧情线")
+		}
+
+		type PlotlineJSON struct {
+			ID          string `json:"id"`
+			Title       string `json:"title"`
+			Type        string `json:"type"`
+			Description string `json:"description"`
+		}
+
+		state := &PlotlineRevisionWorkflowState{
+			CurrentNode:    "init",
+			NovelID:        novel.ID,
+			NovelName:      novel.Title,
+			Author:         novel.Author,
+			Genre:          novel.Genre,
+			Outline:        novel.Outline,
+			UserSuggestion: input.UserSuggestion,
+			MaxRetries:     constant.MaxRetries,
+		}
+
+		if input.PlotlineID != "" {
+			var targetPlotline *model.Plotline
+			var otherPlotlines []*model.Plotline
+			for _, p := range plotlines {
+				if p.ID == input.PlotlineID {
+					targetPlotline = p
+				} else {
+					otherPlotlines = append(otherPlotlines, p)
+				}
+			}
+
+			if targetPlotline == nil {
+				return nil, fmt.Errorf("未找到指定的剧情线: %s", input.PlotlineID)
+			}
+
+			targetJSON, _ := json.MarshalIndent(map[string]interface{}{
+				"plotlines": []PlotlineJSON{{
+					ID:          targetPlotline.ID,
+					Title:       targetPlotline.Title,
+					Type:        targetPlotline.Type,
+					Description: targetPlotline.Description,
+				}},
+			}, "", "  ")
+
+			otherPlotlinesJSON := make([]PlotlineJSON, 0, len(otherPlotlines))
+			for _, p := range otherPlotlines {
+				otherPlotlinesJSON = append(otherPlotlinesJSON, PlotlineJSON{
+					ID:          p.ID,
+					Title:       p.Title,
+					Type:        p.Type,
+					Description: p.Description,
+				})
+			}
+			otherJSON, _ := json.MarshalIndent(map[string]interface{}{
+				"plotlines": otherPlotlinesJSON,
+			}, "", "  ")
+
+			state.TargetPlotlineID = input.PlotlineID
+			state.ExistingPlotlines = string(targetJSON)
+			state.OtherPlotlinesJSON = string(otherJSON)
+
+			fmt.Printf("  ✓ 小说信息加载完成\n")
+			fmt.Printf("    - 目标剧情线: %s (%s)\n", targetPlotline.Title, targetPlotline.ID)
+			fmt.Printf("    - 其他剧情线数量: %d\n", len(otherPlotlines))
+		} else {
+			plotlinesJSON := make([]PlotlineJSON, 0, len(plotlines))
+			for _, p := range plotlines {
+				plotlinesJSON = append(plotlinesJSON, PlotlineJSON{
+					ID:          p.ID,
+					Title:       p.Title,
+					Type:        p.Type,
+					Description: p.Description,
+				})
+			}
+
+			jsonBytes, _ := json.MarshalIndent(map[string]interface{}{
+				"plotlines": plotlinesJSON,
+			}, "", "  ")
+
+			state.ExistingPlotlines = string(jsonBytes)
+			fmt.Printf("  ✓ 现有剧情线数量: %d\n", len(plotlines))
+		}
+
+		return state, nil
+	}
+}
+
+// saveOrUpdateDBNodeV2 保存或更新数据库节点（支持冲突解决后的保存）
+func saveOrUpdateDBNodeV2(novelRepo repository.Repository, plotlineRepo repository.PlotlineRepository) func(context.Context, *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
+	return func(ctx context.Context, state *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
+		fmt.Printf("\n🤖 [保存] 准备保存或更新到数据库...\n")
+
+		if len(state.SavedPlotlineIDs) > 0 {
+			fmt.Printf("  ✓ 已保存\n")
+			state.CurrentNode = "save_success"
+			return state, nil
+		}
+
+		if state.RevisedOutline != "" {
+			fmt.Printf("  → 更新大纲...\n")
+			novel, err := novelRepo.GetByID(state.NovelID)
+			if err != nil {
+				state.ErrorMsg = fmt.Sprintf("查询小说失败: %v", err)
+				state.CurrentNode = "save_failed"
+				return state, nil
+			}
+			novel.Outline = state.RevisedOutline
+			if err := novelRepo.Update(novel); err != nil {
+				state.ErrorMsg = fmt.Sprintf("更新大纲失败: %v", err)
+				state.CurrentNode = "save_failed"
+				return state, nil
+			}
+			fmt.Printf("  ✓ 大纲更新成功\n")
+		}
+
+		var output struct {
+			Plotlines []struct {
+				ID          string `json:"id"`
+				Title       string `json:"title"`
+				Type        string `json:"type"`
+				Description string `json:"description"`
+			} `json:"plotlines"`
+		}
+
+		if err := json.Unmarshal([]byte(state.RevisedPlotlines), &output); err != nil {
+			state.ErrorMsg = fmt.Sprintf("解析JSON失败: %v", err)
+			state.CurrentNode = "save_failed"
+			return state, nil
+		}
+
+		savedIDs := make([]string, 0)
+
+		for _, item := range output.Plotlines {
+			plotline := &model.Plotline{
+				ID:          item.ID,
+				NovelID:     fmt.Sprintf("%d", state.NovelID),
+				Title:       item.Title,
+				Type:        item.Type,
+				Description: item.Description,
+				Status:      "active",
+			}
+
+			if item.ID != "" {
+				if err := plotlineRepo.Update(plotline); err != nil {
+					state.ErrorMsg = fmt.Sprintf("更新失败: %v", err)
+					state.CurrentNode = "save_failed"
+					return state, nil
+				}
+				savedIDs = append(savedIDs, item.ID)
+			} else {
+				plotline.ID = uuid.New().String()
+				if err := plotlineRepo.CreateBatch([]*model.Plotline{plotline}); err != nil {
+					state.ErrorMsg = fmt.Sprintf("插入失败: %v", err)
+					state.CurrentNode = "save_failed"
+					return state, nil
+				}
+				savedIDs = append(savedIDs, plotline.ID)
+			}
+		}
+
+		if state.RevisedOtherPlotlines != "" {
+			fmt.Printf("  → 更新其他剧情线...\n")
+			var otherOutput struct {
+				Plotlines []struct {
+					ID          string `json:"id"`
+					Title       string `json:"title"`
+					Type        string `json:"type"`
+					Description string `json:"description"`
+				} `json:"plotlines"`
+			}
+
+			if err := json.Unmarshal([]byte(state.RevisedOtherPlotlines), &otherOutput); err == nil {
+				for _, item := range otherOutput.Plotlines {
+					plotline := &model.Plotline{
+						ID:          item.ID,
+						NovelID:     fmt.Sprintf("%d", state.NovelID),
+						Title:       item.Title,
+						Type:        item.Type,
+						Description: item.Description,
+						Status:      "active",
+					}
+
+					if err := plotlineRepo.Update(plotline); err == nil {
+						savedIDs = append(savedIDs, item.ID)
+					}
+				}
+				fmt.Printf("  ✓ 其他剧情线更新成功\n")
+			}
+		}
+
+		state.SavedPlotlineIDs = savedIDs
+		fmt.Printf("  ✓ 保存成功，总计 %d 条\n", len(savedIDs))
+		state.CurrentNode = "save_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+// detectOutlineConflictNode 检测与大纲的冲突节点
+func detectOutlineConflictNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
+	return func(ctx context.Context, state *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
+		fmt.Printf("\n🤖 [大纲冲突检测] 开始检测与大纲的冲突...\n")
+
+		// 只在单个剧情线修改时执行冲突检测
+		if state.TargetPlotlineID == "" {
+			fmt.Printf("  ✓ 非单个剧情线修改，跳过大纲冲突检测\n")
+			state.CurrentNode = "outline_conflict_detection_skipped"
+			return state, nil
+		}
+
+		// 如果已经检测过，跳过
+		if state.OutlineConflictDetectionResult != "" {
+			fmt.Printf("  ✓ 已有大纲冲突检测结果，跳过\n")
+			// 解析结果判断是否有冲突
+			var result agents.OutlineConflictDetectionOutput
+			if err := json.Unmarshal([]byte(state.OutlineConflictDetectionResult), &result); err == nil {
+				if result.HasConflict {
+					state.CurrentNode = "outline_conflict_detected"
+				} else {
+					state.CurrentNode = "no_outline_conflict"
+				}
+			}
+			return state, nil
+		}
+
+		// 执行大纲冲突检测
+		output, err := agentExecutor.DetectOutlineConflicts(
+			ctx, chatModel,
+			state.Outline,
+			state.Genre,
+			state.RevisedPlotlines,
+			state.UserSuggestion,
+		)
+
+		if err != nil {
+			state.ErrorMsg = fmt.Sprintf("大纲冲突检测失败: %v", err)
+			state.CurrentNode = "outline_conflict_detection_failed"
+			return state, nil
+		}
+
+		// 保存检测结果
+		resultJSON, _ := json.MarshalIndent(output, "", "  ")
+		state.OutlineConflictDetectionResult = string(resultJSON)
+
+		if output.HasConflict {
+			fmt.Printf("  ⚠️  检测到 %d 个与大纲的冲突\n", len(output.Conflicts))
+			state.CurrentNode = "outline_conflict_detected"
+		} else {
+			fmt.Printf("  ✓ 未检测到与大纲的冲突\n")
+			state.CurrentNode = "no_outline_conflict"
+		}
+
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+// detectPlotlinesConflictNode 检测与其他剧情线的冲突节点（并发检测，最多3个goroutine）
+func detectPlotlinesConflictNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
+	return func(ctx context.Context, state *PlotlineRevisionWorkflowState) (*PlotlineRevisionWorkflowState, error) {
+		fmt.Printf("\n🤖 [剧情线冲突检测] 开始检测与其他剧情线的冲突...\n")
+
+		// 只在单个剧情线修改时执行冲突检测
+		if state.TargetPlotlineID == "" {
+			fmt.Printf("  ✓ 非单个剧情线修改，跳过剧情线冲突检测\n")
+			state.CurrentNode = "plotlines_conflict_detection_skipped"
+			return state, nil
+		}
+
+		// 如果没有其他剧情线，跳过
+		if state.OtherPlotlinesJSON == "" {
+			fmt.Printf("  ✓ 没有其他剧情线，跳过剧情线冲突检测\n")
+			state.CurrentNode = "no_other_plotlines"
+			return state, nil
+		}
+
+		// 如果已经检测过，跳过
+		if state.PlotlinesConflictDetectionResults != "" {
+			fmt.Printf("  ✓ 已有剧情线冲突检测结果，跳过\n")
+			// 解析结果判断是否有冲突
+			var results []agents.PlotlinesConflictDetectionOutput
+			if err := json.Unmarshal([]byte(state.PlotlinesConflictDetectionResults), &results); err == nil {
+				hasConflict := false
+				for _, result := range results {
+					if result.HasConflict {
+						hasConflict = true
+						break
+					}
+				}
+				if hasConflict {
+					state.CurrentNode = "plotlines_conflict_detected"
+				} else {
+					state.CurrentNode = "no_plotlines_conflict"
+				}
+			}
+			return state, nil
+		}
+
+		// 解析其他剧情线列表
+		type PlotlineJSON struct {
+			ID          string `json:"id"`
+			Title       string `json:"title"`
+			Type        string `json:"type"`
+			Description string `json:"description"`
+		}
+		type PlotlinesWrapper struct {
+			Plotlines []PlotlineJSON `json:"plotlines"`
+		}
+		var wrapper PlotlinesWrapper
+		if err := json.Unmarshal([]byte(state.OtherPlotlinesJSON), &wrapper); err != nil {
+			state.ErrorMsg = fmt.Sprintf("解析其他剧情线失败: %v", err)
+			state.CurrentNode = "plotlines_conflict_detection_failed"
+			return state, nil
+		}
+
+		if len(wrapper.Plotlines) == 0 {
+			fmt.Printf("  ✓ 没有其他剧情线，跳过剧情线冲突检测\n")
+			state.CurrentNode = "no_other_plotlines"
+			return state, nil
+		}
+
+		fmt.Printf("  → 开始并发检测 %d 条剧情线的冲突（最多同时3个goroutine）\n", len(wrapper.Plotlines))
+
+		// 使用 channel 控制并发数量（最多3个）
+		semaphore := make(chan struct{}, 3)
+		resultChan := make(chan *agents.PlotlinesConflictDetectionOutput, len(wrapper.Plotlines))
+		errorChan := make(chan error, len(wrapper.Plotlines))
+
+		// 为每个剧情线创建一个goroutine进行检测
+		for _, plotline := range wrapper.Plotlines {
+			semaphore <- struct{}{} // 获取信号量
+
+			go func(p PlotlineJSON) {
+				defer func() { <-semaphore }() // 释放信号量
+
+				// 构建单个剧情线的JSON
+				singlePlotlineJSON, _ := json.Marshal(map[string]interface{}{
+					"id":          p.ID,
+					"title":       p.Title,
+					"type":        p.Type,
+					"description": p.Description,
+				})
+
+				// 执行冲突检测
+				output, err := agentExecutor.DetectPlotlinesConflicts(
+					ctx, chatModel,
+					state.Genre,
+					state.RevisedPlotlines,
+					string(singlePlotlineJSON),
+					p.ID,
+					state.UserSuggestion,
+				)
+
+				if err != nil {
+					errorChan <- fmt.Errorf("检测剧情线 %s 的冲突失败: %w", p.ID, err)
+					return
+				}
+
+				resultChan <- output
+			}(plotline)
+		}
+
+		// 等待所有goroutine完成
+		var results []agents.PlotlinesConflictDetectionOutput
+		var errors []error
+		for i := 0; i < len(wrapper.Plotlines); i++ {
+			select {
+			case result := <-resultChan:
+				results = append(results, *result)
+			case err := <-errorChan:
+				errors = append(errors, err)
+			}
+		}
+
+		// 如果有错误，返回第一个错误
+		if len(errors) > 0 {
+			state.ErrorMsg = fmt.Sprintf("剧情线冲突检测失败: %v", errors[0])
+			state.CurrentNode = "plotlines_conflict_detection_failed"
+			return state, nil
+		}
+
+		// 保存检测结果
+		resultJSON, _ := json.MarshalIndent(results, "", "  ")
+		state.PlotlinesConflictDetectionResults = string(resultJSON)
+
+		// 统计冲突数量
+		conflictCount := 0
+		for _, result := range results {
+			if result.HasConflict {
+				conflictCount += len(result.Conflicts)
+			}
+		}
+
+		if conflictCount > 0 {
+			fmt.Printf("  ⚠️  检测到 %d 个与其他剧情线的冲突\n", conflictCount)
+			state.CurrentNode = "plotlines_conflict_detected"
+		} else {
+			fmt.Printf("  ✓ 未检测到与其他剧情线的冲突\n")
+			state.CurrentNode = "no_plotlines_conflict"
+		}
+
 		state.RetryCount = 0
 		return state, nil
 	}

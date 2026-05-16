@@ -21,6 +21,21 @@ type AgentExecutor interface {
 
 	// PolishPlotline 润色剧情线
 	PolishPlotline(ctx context.Context, chatModel einoModel.BaseChatModel, plotline, genre string) (string, error)
+
+	// DetectConflicts 检测冲突（旧版本，保持兼容）
+	DetectConflicts(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, targetPlotline, otherPlotlines string) (*agents.ConflictDetectionOutput, error)
+
+	// DetectOutlineConflicts 检测与大纲的冲突
+	DetectOutlineConflicts(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, targetPlotline, userSuggestion string) (*agents.OutlineConflictDetectionOutput, error)
+
+	// DetectPlotlinesConflicts 检测与其他剧情线的冲突（单个剧情线）
+	DetectPlotlinesConflicts(ctx context.Context, chatModel einoModel.BaseChatModel, genre, targetPlotline, otherPlotline, otherPlotlineID, userSuggestion string) (*agents.PlotlinesConflictDetectionOutput, error)
+
+	// ResolveOutlineConflicts 解决大纲冲突
+	ResolveOutlineConflicts(ctx context.Context, chatModel einoModel.BaseChatModel, originalOutline, genre, targetPlotline, conflicts string) (string, error)
+
+	// ResolvePlotlinesConflicts 解决其他剧情线冲突（单个剧情线）
+	ResolvePlotlinesConflicts(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, targetPlotline, otherPlotline, otherPlotlineID, conflicts string) (*agents.PlotlinesConflictResolverOutput, error)
 }
 
 // agentExecutor 全局 Agent 执行器实例
@@ -85,6 +100,84 @@ func (e *realAgentExecutor) PolishPlotline(ctx context.Context, chatModel einoMo
 	return agents.PolishPlotline(ctx, agent, &agents.PlotlinePolisherInput{
 		Plotline: plotline,
 		Genre:    genre,
+	})
+}
+
+// DetectConflicts 检测冲突
+func (e *realAgentExecutor) DetectConflicts(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, targetPlotline, otherPlotlines string) (*agents.ConflictDetectionOutput, error) {
+	agent, err := agents.NewConflictDetectionAgent(ctx, chatModel)
+	if err != nil {
+		return nil, err
+	}
+
+	return agents.DetectConflicts(ctx, agent, &agents.ConflictDetectionInput{
+		Outline:        outline,
+		Genre:          genre,
+		TargetPlotline: targetPlotline,
+		OtherPlotlines: otherPlotlines,
+	})
+}
+
+// ResolveOutlineConflicts 解决大纲冲突
+func (e *realAgentExecutor) ResolveOutlineConflicts(ctx context.Context, chatModel einoModel.BaseChatModel, originalOutline, genre, targetPlotline, conflicts string) (string, error) {
+	agent, err := agents.NewOutlineConflictResolverAgent(ctx, chatModel)
+	if err != nil {
+		return "", err
+	}
+
+	return agents.ResolveOutlineConflicts(ctx, agent, &agents.OutlineConflictResolverInput{
+		OriginalOutline: originalOutline,
+		Genre:           genre,
+		TargetPlotline:  targetPlotline,
+		Conflicts:       conflicts,
+	})
+}
+
+// ResolvePlotlinesConflicts 解决其他剧情线冲突（单个剧情线）
+func (e *realAgentExecutor) ResolvePlotlinesConflicts(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, targetPlotline, otherPlotline, otherPlotlineID, conflicts string) (*agents.PlotlinesConflictResolverOutput, error) {
+	agent, err := agents.NewPlotlinesConflictResolverAgent(ctx, chatModel)
+	if err != nil {
+		return nil, err
+	}
+
+	return agents.ResolvePlotlinesConflicts(ctx, agent, &agents.PlotlinesConflictResolverInput{
+		Outline:         outline,
+		Genre:           genre,
+		TargetPlotline:  targetPlotline,
+		OtherPlotline:   otherPlotline,
+		OtherPlotlineID: otherPlotlineID,
+		Conflicts:       conflicts,
+	})
+}
+
+// DetectOutlineConflicts 检测与大纲的冲突
+func (e *realAgentExecutor) DetectOutlineConflicts(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, targetPlotline, userSuggestion string) (*agents.OutlineConflictDetectionOutput, error) {
+	agent, err := agents.NewOutlineConflictDetectionAgent(ctx, chatModel)
+	if err != nil {
+		return nil, err
+	}
+
+	return agents.DetectOutlineConflicts(ctx, agent, &agents.OutlineConflictDetectionInput{
+		Outline:        outline,
+		Genre:          genre,
+		TargetPlotline: targetPlotline,
+		UserSuggestion: userSuggestion,
+	})
+}
+
+// DetectPlotlinesConflicts 检测与其他剧情线的冲突（单个剧情线）
+func (e *realAgentExecutor) DetectPlotlinesConflicts(ctx context.Context, chatModel einoModel.BaseChatModel, genre, targetPlotline, otherPlotline, otherPlotlineID, userSuggestion string) (*agents.PlotlinesConflictDetectionOutput, error) {
+	agent, err := agents.NewPlotlinesConflictDetectionAgent(ctx, chatModel)
+	if err != nil {
+		return nil, err
+	}
+
+	return agents.DetectPlotlinesConflicts(ctx, agent, &agents.PlotlinesConflictDetectionInput{
+		Genre:           genre,
+		TargetPlotline:  targetPlotline,
+		OtherPlotline:   otherPlotline,
+		OtherPlotlineID: otherPlotlineID,
+		UserSuggestion:  userSuggestion,
 	})
 }
 
