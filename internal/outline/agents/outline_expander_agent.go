@@ -3,7 +3,6 @@ package agents
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"waku/internal/outline/prompts"
 	"waku/internal/utils"
 
@@ -11,105 +10,40 @@ import (
 	"github.com/cloudwego/eino/components/model"
 )
 
-// OutlineExpanderInput 大纲扩写器的输入参数
+// OutlineExpanderInput 是大纲扩写 Agent 的输入。
 type OutlineExpanderInput struct {
-	// BriefOutline 简略的大纲内容
 	BriefOutline string
-	// Genre 小说类型
-	Genre string
+	Genre        string
 }
 
-// NewOutlineExpanderAgent 创建小说大纲扩写 Agent
-//
-// 功能：将简略的大纲扩展为详细的故事框架，为后续章节创作提供充分指导
-//
-// 参数：
-//   - ctx: 上下文
-//   - chatModel: 聊天模型实例
-//
-// 返回值：
-//   - *adk.ChatModelAgent: 大纲扩写 Agent
-//   - error: 创建失败时返回错误
-//
-// 使用示例：
-//
-//	agent, err := NewOutlineExpanderAgent(ctx, chatModel)
-//	if err != nil {
-//	    return err
-//	}
-//	result, err := ExpandOutline(ctx, agent, input)
-func NewOutlineExpanderAgent(ctx context.Context, chatModel model.BaseChatModel) (*adk.ChatModelAgent, error) {
+// NewOutlineExpanderAgent 创建小说大纲扩写 Agent。
+func NewOutlineExpanderAgent(ctx context.Context, chatModel model.BaseChatModel, genre string) (*adk.ChatModelAgent, error) {
+	instruction, err := prompts.ResolveOutlinePrompt(prompts.StageExpand, genre)
+	if err != nil {
+		return nil, err
+	}
+
 	return utils.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:        "OutlineExpander",
-		Description: "小说大纲扩写专家，将简略大纲扩展为详细的故事框架",
-		Instruction: prompts.OutlineExpanderPrompt,
+		Description: "在现有 Novel JSON 基础上扩写大纲，并保持统一输出结构",
+		Instruction: instruction,
 		Model:       chatModel,
 	})
 }
 
-// ExpandOutline 扩写小说大纲
-//
-// 参数：
-//   - ctx: 上下文
-//   - agent: 大纲扩写 Agent
-//   - input: 输入参数（简略大纲和小说类型）
-//
-// 返回值：
-//   - string: 扩写后的详细大纲
-//   - error: 扩写失败时返回错误
+// ExpandOutline 扩写小说大纲。
 func ExpandOutline(ctx context.Context, agent *adk.ChatModelAgent, input *OutlineExpanderInput) (string, error) {
 	if input.BriefOutline == "" {
-		return "", fmt.Errorf("简略大纲不能为空")
+		return "", fmt.Errorf("待扩写大纲不能为空")
 	}
 	if input.Genre == "" {
 		return "", fmt.Errorf("小说类型不能为空")
 	}
 
-	// 构建查询消息
-	query := fmt.Sprintf(`请对以下简略大纲进行详细扩写：
+	query := fmt.Sprintf(`请基于以下 Novel JSON 扩写小说大纲，并严格按要求输出：
 
-**小说类型**：%s
+小说类型：%s
+当前 Novel JSON：%s`, input.Genre, input.BriefOutline)
 
-**简略大纲**：
-%s
-
-请将大纲扩展为详细的故事框架，为后续创作提供充分指导。`, input.Genre, input.BriefOutline)
-
-	// 创建 Runner 并执行查询（启用流式输出）
-	runner := adk.NewRunner(ctx, adk.RunnerConfig{
-		EnableStreaming: true,
-		Agent:           agent,
-	})
-
-	iter := runner.Query(ctx, query)
-
-	slog.Info("[OutlineExpander] 开始扩写大纲...")
-
-	// 收集响应内容
-	var result string
-	for {
-		event, ok := iter.Next()
-		if !ok {
-			break
-		}
-
-		if event.Err != nil {
-			return "", fmt.Errorf("扩写大纲失败: %w", event.Err)
-		}
-
-		// 获取消息内容
-		if event.Output != nil {
-			if msg, _, err := adk.GetMessage(event); err == nil {
-				// 打印流式输出的内容
-				if msg.Content != "" {
-					slog.Info(msg.Content)
-					result += msg.Content
-				}
-			}
-		}
-	}
-
-	slog.Info("[OutlineExpander] 大纲扩写完成")
-
-	return result, nil
+	return runNovelJSONQuery(ctx, agent, query, input.Genre, "扩写大纲")
 }

@@ -22,6 +22,8 @@ const (
 	StageExpand = "扩写"
 	// StagePolish 润色阶段
 	StagePolish = "润色"
+	// StageReview 审核阶段
+	StageReview = "审核"
 	// StageRevise 修改阶段
 	StageRevise = "修改"
 	// StageExtract 提取阶段（用于剧情线提取）

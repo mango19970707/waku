@@ -7,139 +7,55 @@ import (
 	"github.com/cloudwego/eino/compose"
 )
 
-// routeAfterGenerate 生成后的路由
-func routeAfterGenerate(ctx context.Context, state *OutlineWorkflowState) (string, error) {
-	if state.CurrentNode == "generate_success" {
-		return "expand", nil
-	}
-
-	// 检查是否超过最大重试次数
-	if state.RetryCount >= state.MaxRetries {
-		fmt.Printf("  ❌ 生成失败，已达到最大重试次数 %d\n", state.MaxRetries)
-		return compose.END, fmt.Errorf("生成失败: %s", state.ErrorMsg)
-	}
-
-	// 重试
-	state.RetryCount++
-	fmt.Printf("  ⚠️  生成失败，重试 %d/%d: %s\n", state.RetryCount, state.MaxRetries, state.ErrorMsg)
-	return "generate", nil
-}
-
-// routeAfterExpand 扩写后的路由
-func routeAfterExpand(ctx context.Context, state *OutlineWorkflowState) (string, error) {
-	if state.CurrentNode == "expand_success" {
+// routeAfterInit 在初始化后决定工作流模式。
+func routeAfterInit(ctx context.Context, state *OutlineWorkflowState) (string, error) {
+	if state.NovelID > 0 && state.UserSuggestion != "" {
 		return "polish", nil
 	}
-
-	// 检查是否超过最大重试次数
-	if state.RetryCount >= state.MaxRetries {
-		fmt.Printf("  ❌ 扩写失败，已达到最大重试次数 %d\n", state.MaxRetries)
-		return compose.END, fmt.Errorf("扩写失败: %s", state.ErrorMsg)
+	if state.OriginalOutline != "" {
+		return "generate", nil
 	}
-
-	// 重试
-	state.RetryCount++
-	fmt.Printf("  ⚠️  扩写失败，重试 %d/%d: %s\n", state.RetryCount, state.MaxRetries, state.ErrorMsg)
-	return "expand", nil
+	return compose.END, fmt.Errorf("输入参数不足，无法确定工作流模式")
 }
 
-// routeAfterPolish 润色后的路由
+// routeAfterGenerate 处理生成节点后的路由。
+func routeAfterGenerate(ctx context.Context, state *OutlineWorkflowState) (string, error) {
+	return routeWithRetry(state, "generate_success", "expand", "generate")
+}
+
+// routeAfterExpand 处理扩写节点后的路由。
+func routeAfterExpand(ctx context.Context, state *OutlineWorkflowState) (string, error) {
+	return routeWithRetry(state, "expand_success", "polish", "expand")
+}
+
+// routeAfterPolish 处理润色节点后的路由。
 func routeAfterPolish(ctx context.Context, state *OutlineWorkflowState) (string, error) {
-	if state.CurrentNode == "polish_success" {
-		return "extract", nil
-	}
-
-	// 检查是否超过最大重试次数
-	if state.RetryCount >= state.MaxRetries {
-		fmt.Printf("  ❌ 润色失败，已达到最大重试次数 %d\n", state.MaxRetries)
-		return compose.END, fmt.Errorf("润色失败: %s", state.ErrorMsg)
-	}
-
-	// 重试
-	state.RetryCount++
-	fmt.Printf("  ⚠️  润色失败，重试 %d/%d: %s\n", state.RetryCount, state.MaxRetries, state.ErrorMsg)
-	return "polish", nil
+	return routeWithRetry(state, "polish_success", "review", "polish")
 }
 
-// routeAfterExtract 提取后的路由
-func routeAfterExtract(ctx context.Context, state *OutlineWorkflowState) (string, error) {
-	if state.CurrentNode == "extract_success" {
-		return "saveToDB", nil
-	}
-
-	// 检查是否超过最大重试次数
-	if state.RetryCount >= state.MaxRetries {
-		fmt.Printf("  ❌ 提取失败，已达到最大重试次数 %d\n", state.MaxRetries)
-		return compose.END, fmt.Errorf("提取失败: %s", state.ErrorMsg)
-	}
-
-	// 重试
-	state.RetryCount++
-	fmt.Printf("  ⚠️  提取失败，重试 %d/%d: %s\n", state.RetryCount, state.MaxRetries, state.ErrorMsg)
-	return "extract", nil
+// routeAfterReview 处理审核节点后的路由。
+func routeAfterReview(ctx context.Context, state *OutlineWorkflowState) (string, error) {
+	return routeWithRetry(state, "review_success", "revise", "review")
 }
 
-// routeAfterSave 保存后的路由
+// routeAfterRevise 处理修改节点后的路由。
+func routeAfterRevise(ctx context.Context, state *OutlineWorkflowState) (string, error) {
+	return routeWithRetry(state, "revise_success", "saveToDB", "revise")
+}
+
+// routeAfterSave 处理保存节点后的路由。
 func routeAfterSave(ctx context.Context, state *OutlineWorkflowState) (string, error) {
-	if state.CurrentNode == "save_success" {
-		return compose.END, nil
-	}
+	return routeWithRetry(state, "save_success", compose.END, "saveToDB")
+}
 
-	// 如果用户拒绝保存，直接结束流程
-	if state.CurrentNode == "save_rejected" {
-		fmt.Printf("  ❌ 用户拒绝保存操作: %s\n", state.ErrorMsg)
-		return compose.END, fmt.Errorf("用户拒绝保存: %s", state.ErrorMsg)
+func routeWithRetry(state *OutlineWorkflowState, successNode, nextNode, retryNode string) (string, error) {
+	if state.CurrentNode == successNode {
+		return nextNode, nil
 	}
-
-	// 检查是否超过最大重试次数
 	if state.RetryCount >= state.MaxRetries {
-		fmt.Printf("  ❌ 保存失败，已达到最大重试次数 %d\n", state.MaxRetries)
-		return compose.END, fmt.Errorf("保存失败: %s", state.ErrorMsg)
+		return compose.END, fmt.Errorf("%s 失败: %s", retryNode, state.ErrorMsg)
 	}
 
-	// 重试
 	state.RetryCount++
-	fmt.Printf("  ⚠️  保存失败，重试 %d/%d: %s\n", state.RetryCount, state.MaxRetries, state.ErrorMsg)
-	return "saveToDB", nil
-}
-
-// ==================== revision路由函数 ====================
-
-// routeAfterRevise 修改节点后的路由
-func routeAfterRevise(ctx context.Context, state *OutlineRevisionWorkflowState) (string, error) {
-	if state.CurrentNode == "revise_failed" {
-		if state.RetryCount < state.MaxRetries {
-			state.RetryCount++
-			fmt.Printf("  ⚠️  修改失败，重试 %d/%d: %s\n", state.RetryCount, state.MaxRetries, state.ErrorMsg)
-			return "revise", nil
-		}
-		return compose.END, fmt.Errorf("修改大纲失败（已重试%d次）: %s", state.MaxRetries, state.ErrorMsg)
-	}
-	return "extract", nil
-}
-
-// routeAfterExtractRevision 提取节点后的路由
-func routeAfterExtractRevision(ctx context.Context, state *OutlineRevisionWorkflowState) (string, error) {
-	if state.CurrentNode == "extract_failed" {
-		if state.RetryCount < state.MaxRetries {
-			state.RetryCount++
-			fmt.Printf("  ⚠️  提取失败，重试 %d/%d: %s\n", state.RetryCount, state.MaxRetries, state.ErrorMsg)
-			return "extract", nil
-		}
-		return compose.END, fmt.Errorf("提取大纲信息失败（已重试%d次）: %s", state.MaxRetries, state.ErrorMsg)
-	}
-	return "update", nil
-}
-
-// routeAfterUpdate 更新节点后的路由
-func routeAfterUpdate(ctx context.Context, state *OutlineRevisionWorkflowState) (string, error) {
-	if state.CurrentNode == "update_failed" {
-		if state.RetryCount < state.MaxRetries {
-			state.RetryCount++
-			fmt.Printf("  ⚠️  更新失败，重试 %d/%d: %s\n", state.RetryCount, state.MaxRetries, state.ErrorMsg)
-			return "update", nil
-		}
-		return compose.END, fmt.Errorf("更新数据库失败（已重试%d次）: %s", state.MaxRetries, state.ErrorMsg)
-	}
-	return compose.END, nil
+	return retryNode, nil
 }
