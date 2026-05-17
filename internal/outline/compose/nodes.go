@@ -716,7 +716,7 @@ func saveStageFile(author, novelName, stage, content string) error {
 }
 
 func stageFilePath(author, novelName, stage string) string {
-	return filepath.Join(projectRootDir(), "data", "content", author, novelName, "abstract", stage+".json")
+	return filepath.Join(projectRootDir(), "data", "content", author, novelName, "abstract_bak", stage+".json")
 }
 
 func projectRootDir() string {

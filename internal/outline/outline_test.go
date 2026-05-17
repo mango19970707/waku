@@ -71,15 +71,17 @@ func TestOutlineWorkflowGraph_FullGeneration(t *testing.T) {
 func TestOutlineWorkflowGraph_QuickRevision(t *testing.T) {
 	ctx := context.Background()
 	repo := repository.NewRepository(db)
+	chatModel, err := utils.NewChatModel(ctx, &cfg.Model)
 
-	graph, err := compose.BuildOutlineWorkflowGraph(ctx, nil, repo)
+	graph, err := compose.BuildOutlineWorkflowGraph(ctx, chatModel, repo)
 	require.NoError(t, err)
 
 	input := &compose.OutlineWorkflowInput{
-		NovelID:        1,
+		NovelID:        6,
 		Genre:          "玄幻",
-		UserSuggestion: "增强主角的成长线。",
+		UserSuggestion: "优化妖兽境界，和人族修炼境界一一对应；主角不是双修，身为妖兽，只修炼妖兽的功法和境界",
 	}
 
-	compose.ExecuteOutlineWorkflow(ctx, graph, input)
+	result, _ := compose.ExecuteOutlineWorkflow(ctx, graph, input)
+	pretty.Println(*result)
 }
