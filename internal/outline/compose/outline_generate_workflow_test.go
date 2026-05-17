@@ -19,12 +19,18 @@ import (
 )
 
 type mockAgentExecutor struct {
-	generateCalls int
-	expandCalls   int
-	polishCalls   int
-	reviewCalls   int
-	reviseCalls   int
-	failGenerate  int
+	generateCalls         int
+	expandCalls           int
+	polishCalls           int
+	reviewCalls           int
+	reviseCalls           int
+	failGenerate          int
+	lastPolishOutline     string
+	lastPolishSuggestion  string
+	lastReviewOutline     string
+	lastReviewSuggestion  string
+	lastReviseOutline     string
+	lastReviseSuggestions string
 }
 
 func (m *mockAgentExecutor) GenerateOutline(ctx context.Context, chatModel einoModel.BaseChatModel, originalOutline, genre string) (string, error) {
@@ -40,19 +46,25 @@ func (m *mockAgentExecutor) ExpandOutline(ctx context.Context, chatModel einoMod
 	return buildMockNovelJSON("星火", "少年踏入异界。", "扩写后的完整大纲", true, false)
 }
 
-func (m *mockAgentExecutor) PolishOutline(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre string) (string, error) {
+func (m *mockAgentExecutor) PolishOutline(ctx context.Context, chatModel einoModel.BaseChatModel, outline, userSuggestion, genre string) (string, error) {
 	m.polishCalls++
+	m.lastPolishOutline = outline
+	m.lastPolishSuggestion = userSuggestion
 	return buildMockNovelJSON("星火", "更凝练的简介。", "润色后的完整大纲", true, false)
 }
 
-func (m *mockAgentExecutor) ReviewOutline(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre string) (string, error) {
+func (m *mockAgentExecutor) ReviewOutline(ctx context.Context, chatModel einoModel.BaseChatModel, outline, userSuggestion, genre string) (string, error) {
 	m.reviewCalls++
-	return buildMockNovelJSON("星火", "更凝练的简介。", "润色后的完整大纲", true, true)
+	m.lastReviewOutline = outline
+	m.lastReviewSuggestion = userSuggestion
+	return buildMockReviewSuggestions()
 }
 
 func (m *mockAgentExecutor) ReviseOutline(ctx context.Context, chatModel einoModel.BaseChatModel, originalOutline, suggestions, genre string) (string, error) {
 	m.reviseCalls++
-	return buildMockNovelJSON("星火", "最终简介。", "修改后的最终大纲", true, false)
+	m.lastReviseOutline = originalOutline
+	m.lastReviseSuggestions = suggestions
+	return buildMockNovelJSON("final-title", "final-synopsis", "final-outline", true, false)
 }
 
 func buildMockNovelJSON(title, synopsis, outlineText string, cultivation, withReview bool) (string, error) {
@@ -62,6 +74,8 @@ func buildMockNovelJSON(title, synopsis, outlineText string, cultivation, withRe
 	if cultivation {
 		outlineMap["worldview"] = "诸天万界并立"
 		outlineMap["cultivation_system"] = "炼气、筑基、金丹、元婴"
+		outlineMap["core_conflicts"] = "core conflict"
+		outlineMap["major_characters"] = "lead, mentor, ally"
 	}
 	if withReview {
 		outlineMap["review_suggestions"] = []map[string]any{
@@ -84,6 +98,23 @@ func buildMockNovelJSON(title, synopsis, outlineText string, cultivation, withRe
 		"outline":  string(outlineJSON),
 	}
 	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+func buildMockReviewSuggestions() (string, error) {
+	suggestions := []map[string]any{
+		{
+			"type":       "logic",
+			"problem":    "weak early conflict",
+			"suggestion": "increase pressure from the sect",
+			"severity":   "medium",
+		},
+	}
+
+	body, err := json.Marshal(suggestions)
 	if err != nil {
 		return "", err
 	}
@@ -132,6 +163,7 @@ func TestOutlineWorkflowGraph_FullGeneration(t *testing.T) {
 		Genre:           "玄幻",
 		OriginalOutline: "少年穿越异界，寻找真相。",
 	}
+	cleanupCheckpointFiles(t, input.Author, input.NovelName)
 	t.Cleanup(func() {
 		cleanupCheckpointFiles(t, input.Author, input.NovelName)
 	})
@@ -144,21 +176,25 @@ func TestOutlineWorkflowGraph_FullGeneration(t *testing.T) {
 	require.Equal(t, 1, mock.polishCalls)
 	require.Equal(t, 1, mock.reviewCalls)
 	require.Equal(t, 1, mock.reviseCalls)
+	require.Empty(t, mock.lastPolishSuggestion)
+	require.Empty(t, mock.lastReviewSuggestion)
+	require.Equal(t, mock.lastReviewOutline, mock.lastReviseOutline)
+	require.NotEmpty(t, result.ReviewSuggestions)
 	require.NotZero(t, result.NovelID)
 
 	saved, err := repo.GetByID(result.NovelID)
 	require.NoError(t, err)
-	require.Equal(t, "星火", saved.Title)
-	require.Equal(t, "最终简介。", saved.Synopsis)
+	require.Equal(t, "final-title", saved.Title)
+	require.Equal(t, "final-synopsis", saved.Synopsis)
 
 	var outline map[string]any
 	require.NoError(t, json.Unmarshal([]byte(saved.Outline), &outline))
-	require.Equal(t, "修改后的最终大纲", outline["outline"])
+	require.Equal(t, "final-outline", outline["outline"])
 	require.NotEmpty(t, outline["worldview"])
 	require.NotEmpty(t, outline["cultivation_system"])
 }
 
-func TestOutlineWorkflowGraph_QuickRevision(t *testing.T) {
+func TestOutlineWorkflowGraph_QuickRevision_PrePolish(t *testing.T) {
 	ctx := context.Background()
 	db := setupTestDB(t)
 	repo := repository.NewRepository(db)
@@ -201,6 +237,9 @@ func TestOutlineWorkflowGraph_QuickRevision(t *testing.T) {
 	require.Equal(t, 1, mock.polishCalls)
 	require.Equal(t, 1, mock.reviewCalls)
 	require.Equal(t, 1, mock.reviseCalls)
+	require.Equal(t, input.UserSuggestion, mock.lastPolishSuggestion)
+	require.Equal(t, input.UserSuggestion, mock.lastReviewSuggestion)
+	require.NotContains(t, mock.lastReviseSuggestions, "user_suggestion")
 }
 
 func TestOutlineWorkflowGraph_RetryGenerate(t *testing.T) {
@@ -219,6 +258,7 @@ func TestOutlineWorkflowGraph_RetryGenerate(t *testing.T) {
 		Genre:           "玄幻",
 		OriginalOutline: "一名普通人逆袭成长。",
 	}
+	cleanupCheckpointFiles(t, input.Author, input.NovelName)
 	t.Cleanup(func() {
 		cleanupCheckpointFiles(t, input.Author, input.NovelName)
 	})

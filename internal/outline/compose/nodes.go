@@ -101,7 +101,6 @@ func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(c
 			state.RetryCount = 0
 			return state, nil
 		}
-
 		generated, err := agentExecutor.GenerateOutline(ctx, chatModel, state.OriginalOutline, state.Genre)
 		if err != nil {
 			state.CurrentNode = "generate_failed"
@@ -162,7 +161,6 @@ func expandNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			state.RetryCount = 0
 			return state, nil
 		}
-
 		expanded, err := agentExecutor.ExpandOutline(ctx, chatModel, state.GeneratedOutline, state.Genre)
 		if err != nil {
 			state.CurrentNode = "expand_failed"
@@ -223,13 +221,13 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			state.RetryCount = 0
 			return state, nil
 		}
-
+		// 在 quick revision 链路中，polish 节点承担“按用户建议预修改 + 润色”的职责。
 		source := state.ExpandedOutline
 		if source == "" {
 			source = state.OriginalOutline
 		}
 
-		polished, err := agentExecutor.PolishOutline(ctx, chatModel, source, state.Genre)
+		polished, err := agentExecutor.PolishOutline(ctx, chatModel, source, state.UserSuggestion, state.Genre)
 		if err != nil {
 			state.CurrentNode = "polish_failed"
 			state.ErrorMsg = fmt.Sprintf("润色大纲失败: %v", err)
@@ -277,27 +275,26 @@ func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			return state, nil
 		}
 		if content != "" {
-			normalized, payload, err := normalizeStageOutput(content, state.Genre, state.NovelName, state.Synopsis)
+			normalized, err := normalizeReviewSuggestions(content)
 			if err != nil {
 				state.CurrentNode = "review_failed"
 				state.ErrorMsg = fmt.Sprintf("解析审核阶段数据失败: %v", err)
 				return state, nil
 			}
 			state.ReviewSuggestions = normalized
-			applyPayloadToState(state, payload)
 			state.CurrentNode = "review_success"
 			state.RetryCount = 0
 			return state, nil
 		}
 
-		reviewed, err := agentExecutor.ReviewOutline(ctx, chatModel, state.PolishedOutline, state.Genre)
+		reviewed, err := agentExecutor.ReviewOutline(ctx, chatModel, latestOutlineForRevision(state), state.UserSuggestion, state.Genre)
 		if err != nil {
 			state.CurrentNode = "review_failed"
 			state.ErrorMsg = fmt.Sprintf("审核大纲失败: %v", err)
 			return state, nil
 		}
 
-		normalized, payload, err := contracts.NormalizeNovelPayload(reviewed, state.Genre)
+		normalized, err := normalizeReviewSuggestions(reviewed)
 		if err != nil {
 			state.CurrentNode = "review_failed"
 			state.ErrorMsg = fmt.Sprintf("审核阶段输出格式无效: %v", err)
@@ -305,7 +302,6 @@ func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 		}
 
 		state.ReviewSuggestions = normalized
-		applyPayloadToState(state, payload)
 		if err := saveStageFile(state.Author, state.NovelName, constant.StageReview, normalized); err != nil {
 			state.CurrentNode = "review_failed"
 			state.ErrorMsg = fmt.Sprintf("保存审核阶段文件失败: %v", err)
@@ -334,14 +330,14 @@ func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 		content, err := loadStageFile(state.Author, state.NovelName, constant.StageRevise)
 		if err != nil {
 			state.CurrentNode = "revise_failed"
-			state.ErrorMsg = fmt.Sprintf("加载修改阶段文件失败: %v", err)
+			state.ErrorMsg = fmt.Sprintf("???????????????: %v", err)
 			return state, nil
 		}
 		if content != "" {
 			normalized, payload, err := normalizeStageOutput(content, state.Genre, state.NovelName, state.Synopsis)
 			if err != nil {
 				state.CurrentNode = "revise_failed"
-				state.ErrorMsg = fmt.Sprintf("解析修改阶段数据失败: %v", err)
+				state.ErrorMsg = fmt.Sprintf("???????????????: %v", err)
 				return state, nil
 			}
 			state.RevisedOutline = normalized
@@ -351,22 +347,34 @@ func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			return state, nil
 		}
 
-		suggestions := state.ReviewSuggestions
-		if state.NovelID > 0 && state.UserSuggestion != "" {
-			suggestions = state.UserSuggestion
+		source := latestOutlineForRevision(state)
+		if source == "" {
+			state.CurrentNode = "revise_failed"
+			state.ErrorMsg = "latest outline is empty"
+			return state, nil
 		}
 
-		revised, err := agentExecutor.ReviseOutline(ctx, chatModel, state.PolishedOutline, suggestions, state.Genre)
+		suggestions := strings.TrimSpace(state.ReviewSuggestions)
+		if suggestions == "" {
+			suggestions = strings.TrimSpace(state.UserSuggestion)
+		}
+		if suggestions == "" {
+			state.CurrentNode = "revise_failed"
+			state.ErrorMsg = "revision suggestions are empty"
+			return state, nil
+		}
+
+		revised, err := agentExecutor.ReviseOutline(ctx, chatModel, source, suggestions, state.Genre)
 		if err != nil {
 			state.CurrentNode = "revise_failed"
-			state.ErrorMsg = fmt.Sprintf("修改大纲失败: %v", err)
+			state.ErrorMsg = fmt.Sprintf("?????????: %v", err)
 			return state, nil
 		}
 
 		normalized, payload, err := contracts.NormalizeNovelPayload(revised, state.Genre)
 		if err != nil {
 			state.CurrentNode = "revise_failed"
-			state.ErrorMsg = fmt.Sprintf("修改阶段输出格式无效: %v", err)
+			state.ErrorMsg = fmt.Sprintf("???????????????: %v", err)
 			return state, nil
 		}
 
@@ -374,7 +382,7 @@ func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 		applyPayloadToState(state, payload)
 		if err := saveStageFile(state.Author, state.NovelName, constant.StageRevise, normalized); err != nil {
 			state.CurrentNode = "revise_failed"
-			state.ErrorMsg = fmt.Sprintf("保存修改阶段文件失败: %v", err)
+			state.ErrorMsg = fmt.Sprintf("???????????????: %v", err)
 			return state, nil
 		}
 
@@ -578,6 +586,93 @@ func firstNonEmpty(values ...string) string {
 
 func requiresCultivationFields(genre string) bool {
 	return strings.Contains(genre, "玄幻") || strings.Contains(genre, "修真")
+}
+
+func normalizeReviewSuggestions(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", fmt.Errorf("review suggestions cannot be empty")
+	}
+
+	var decoded any
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err == nil {
+		switch value := decoded.(type) {
+		case []any:
+			return marshalNormalizedJSON(value)
+		case map[string]any:
+			if suggestions, ok := value["review_suggestions"]; ok {
+				return marshalNormalizedJSON(suggestions)
+			}
+		}
+	}
+
+	_, payload, err := contracts.NormalizeNovelPayload(trimmed, "")
+	if err == nil {
+		return extractReviewSuggestionsFromNovelPayload(payload)
+	}
+
+	return "", fmt.Errorf("review output must be valid JSON suggestions")
+}
+
+func extractReviewSuggestionsFromNovelPayload(payload *contracts.NovelPayload) (string, error) {
+	if payload == nil {
+		return "", fmt.Errorf("review result is empty")
+	}
+
+	var outlineMap map[string]any
+	if err := json.Unmarshal([]byte(payload.Outline), &outlineMap); err != nil {
+		return "", fmt.Errorf("parse outline from review result: %w", err)
+	}
+
+	suggestions, ok := outlineMap["review_suggestions"]
+	if !ok {
+		return "", fmt.Errorf("review result missing review_suggestions")
+	}
+
+	return marshalNormalizedJSON(suggestions)
+}
+
+func marshalNormalizedJSON(value any) (string, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("marshal json: %w", err)
+	}
+	return string(data), nil
+}
+
+func latestOutlineForRevision(state *OutlineWorkflowState) string {
+	switch {
+	case strings.TrimSpace(state.PolishedOutline) != "":
+		return state.PolishedOutline
+	case strings.TrimSpace(state.ExpandedOutline) != "":
+		return state.ExpandedOutline
+	case strings.TrimSpace(state.GeneratedOutline) != "":
+		return state.GeneratedOutline
+	default:
+		return strings.TrimSpace(state.OriginalOutline)
+	}
+}
+
+func combineRevisionSuggestions(reviewSuggestions, userSuggestion string) string {
+	reviewSuggestions = strings.TrimSpace(reviewSuggestions)
+	userSuggestion = strings.TrimSpace(userSuggestion)
+
+	switch {
+	case reviewSuggestions != "" && userSuggestion != "":
+		combined := map[string]any{
+			"review_suggestions": json.RawMessage(reviewSuggestions),
+			"user_suggestion":    userSuggestion,
+		}
+		data, err := json.Marshal(combined)
+		if err != nil {
+			return reviewSuggestions + "\n\nUser suggestion:\n" + userSuggestion
+		}
+		return string(data)
+	case reviewSuggestions != "":
+		return reviewSuggestions
+	default:
+		return userSuggestion
+	}
 }
 
 func loadStageFile(author, novelName, stage string) (string, error) {

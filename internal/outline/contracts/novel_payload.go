@@ -21,6 +21,8 @@ type xuanhuanOutlinePayload struct {
 	Outline           string `json:"outline"`
 	Worldview         string `json:"worldview"`
 	CultivationSystem string `json:"cultivation_system"`
+	CoreConflicts     string `json:"core_conflicts"`
+	MajorCharacters   string `json:"major_characters"`
 }
 
 // NormalizeNovelPayload 校验并规范化 Agent 输出。
@@ -124,6 +126,12 @@ func validateXuanhuanOutline(outlineMap map[string]any) error {
 	}
 	if payload.CultivationSystem == "" {
 		return fmt.Errorf("玄幻题材要求 cultivation_system 不能为空")
+	}
+	if payload.CoreConflicts == "" {
+		return fmt.Errorf("玄幻题材要求 core_conflicts 不能为空")
+	}
+	if payload.MajorCharacters == "" {
+		return fmt.Errorf("玄幻题材要求 major_characters 不能为空")
 	}
 
 	return nil

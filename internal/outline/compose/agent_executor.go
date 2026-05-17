@@ -37,28 +37,30 @@ func (e *agentExecutorImpl) ExpandOutline(ctx context.Context, chatModel einoMod
 	return agents.ExpandOutline(ctx, agent, input)
 }
 
-func (e *agentExecutorImpl) PolishOutline(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre string) (string, error) {
+func (e *agentExecutorImpl) PolishOutline(ctx context.Context, chatModel einoModel.BaseChatModel, outline, userSuggestion, genre string) (string, error) {
 	agent, err := agents.NewOutlinePolisherAgent(ctx, chatModel, genre)
 	if err != nil {
 		return "", fmt.Errorf("创建润色 Agent 失败: %w", err)
 	}
 
 	input := &agents.OutlinePolisherInput{
-		Outline: outline,
-		Genre:   genre,
+		Outline:        outline,
+		UserSuggestion: userSuggestion,
+		Genre:          genre,
 	}
 	return agents.PolishOutline(ctx, agent, input)
 }
 
-func (e *agentExecutorImpl) ReviewOutline(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre string) (string, error) {
+func (e *agentExecutorImpl) ReviewOutline(ctx context.Context, chatModel einoModel.BaseChatModel, outline, userSuggestion, genre string) (string, error) {
 	agent, err := agents.NewOutlineReviewerAgent(ctx, chatModel, genre)
 	if err != nil {
 		return "", fmt.Errorf("创建审核 Agent 失败: %w", err)
 	}
 
 	input := &agents.OutlineReviewerInput{
-		Outline: outline,
-		Genre:   genre,
+		Outline:        outline,
+		UserSuggestion: userSuggestion,
+		Genre:          genre,
 	}
 	return agents.ReviewOutline(ctx, agent, input)
 }

@@ -46,8 +46,8 @@ type OutlineWorkflowInput struct {
 type AgentExecutor interface {
 	GenerateOutline(ctx context.Context, chatModel einoModel.BaseChatModel, originalOutline, genre string) (string, error)
 	ExpandOutline(ctx context.Context, chatModel einoModel.BaseChatModel, briefOutline, genre string) (string, error)
-	PolishOutline(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre string) (string, error)
-	ReviewOutline(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre string) (string, error)
+	PolishOutline(ctx context.Context, chatModel einoModel.BaseChatModel, outline, userSuggestion, genre string) (string, error)
+	ReviewOutline(ctx context.Context, chatModel einoModel.BaseChatModel, outline, userSuggestion, genre string) (string, error)
 	ReviseOutline(ctx context.Context, chatModel einoModel.BaseChatModel, originalOutline, suggestions, genre string) (string, error)
 }
 
@@ -63,11 +63,11 @@ func (e *defaultAgentExecutor) ExpandOutline(ctx context.Context, chatModel eino
 	return "", fmt.Errorf("agent executor not implemented")
 }
 
-func (e *defaultAgentExecutor) PolishOutline(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre string) (string, error) {
+func (e *defaultAgentExecutor) PolishOutline(ctx context.Context, chatModel einoModel.BaseChatModel, outline, userSuggestion, genre string) (string, error) {
 	return "", fmt.Errorf("agent executor not implemented")
 }
 
-func (e *defaultAgentExecutor) ReviewOutline(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre string) (string, error) {
+func (e *defaultAgentExecutor) ReviewOutline(ctx context.Context, chatModel einoModel.BaseChatModel, outline, userSuggestion, genre string) (string, error) {
 	return "", fmt.Errorf("agent executor not implemented")
 }
 
@@ -145,7 +145,7 @@ func ExecuteOutlineWorkflow(ctx context.Context, graph compose.Runnable[*Outline
 	isQuickRevision := input.NovelID > 0 && input.UserSuggestion != ""
 	if isQuickRevision {
 		if input.Genre == "" {
-			err = fmt.Errorf("快速修改模式下小说类型不能为空")
+			err = fmt.Errorf("快速预修改模式下小说类型不能为空")
 			return nil, err
 		}
 		state, err = graph.Invoke(ctx, input)

@@ -10,6 +10,7 @@ import (
 // routeAfterInit 在初始化后决定工作流模式。
 func routeAfterInit(ctx context.Context, state *OutlineWorkflowState) (string, error) {
 	if state.NovelID > 0 && state.UserSuggestion != "" {
+		// quick revision 模式从 polish 节点进入，但这里的 polish 语义是“按用户建议预修改 + 润色”。
 		return "polish", nil
 	}
 	if state.OriginalOutline != "" {
