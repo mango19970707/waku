@@ -14,39 +14,41 @@ import (
 func NewPlotlineReviewerAgent(ctx context.Context, chatModel model.BaseChatModel) (*adk.ChatModelAgent, error) {
 	return utils.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:        "PlotlineReviewer",
-		Description: "审核剧情线之间与大纲之间的冲突和不一致",
+		Description: "审核剧情线并输出修改建议",
 		Instruction: prompts.PlotlineReviewerPrompt,
 		Model:       chatModel,
 	})
 }
 
-// ReviewPlotlines 审核剧情线集合并返回统一 JSON。
+// ReviewPlotlines 审核剧情线集合，仅返回修改意见 JSON。
 func ReviewPlotlines(ctx context.Context, agent *adk.ChatModelAgent, outline, genre, plotlines, userSuggestion string) (string, error) {
 	if outline == "" {
-		return "", fmt.Errorf("小说大纲不能为空")
+		return "", fmt.Errorf("outline cannot be empty")
 	}
 	if genre == "" {
-		return "", fmt.Errorf("小说类型不能为空")
+		return "", fmt.Errorf("genre cannot be empty")
 	}
 	if plotlines == "" {
-		return "", fmt.Errorf("剧情线集合不能为空")
+		return "", fmt.Errorf("plotlines cannot be empty")
 	}
 
 	query := fmt.Sprintf(`请审核以下剧情线集合，找出它们与大纲或彼此之间可能存在的冲突、不一致和节奏问题。
 
-小说类型：
-%s
+小说类型：%s
 
-小说大纲：
-%s
+小说大纲：%s
 
-用户建议：
-%s
+用户建议：%s
 
 剧情线集合：
 %s
 
-请只输出 JSON，顶层只能包含 plotlines。你必须保留全部剧情线，并把审核建议写回每条剧情线的扩展字段。`, genre, outline, userSuggestion, plotlines)
+请只输出 JSON，顶层只能包含 reviews。
+每条 review 必须包含：
+1. original_content：对应的原剧情线内容
+2. modification_suggestion：对应的修改建议
 
-	return runPlotlineJSONQuery(ctx, agent, query, "审核剧情线")
+即使某条剧情线无需修改，也请保留 original_content，并给出“无需修改”之类的建议。`, genre, outline, userSuggestion, plotlines)
+
+	return runPlotlineReviewJSONQuery(ctx, agent, query, "review plotlines")
 }

@@ -8,12 +8,12 @@ import (
 	einoModel "github.com/cloudwego/eino/components/model"
 )
 
-// AgentExecutor 定义剧情线工作流依赖的 Agent 执行接口。
+// AgentExecutor 定义剧情工作流依赖的 Agent 执行接口。
 type AgentExecutor interface {
 	GeneratePlotlines(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre string) (string, error)
-	PolishPlotlines(ctx context.Context, chatModel einoModel.BaseChatModel, plotlines, genre string) (string, error)
+	PolishPlotlines(ctx context.Context, chatModel einoModel.BaseChatModel, plotlines, genre, userSuggestion string) (string, error)
 	ReviewPlotlines(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, plotlines, userSuggestion string) (string, error)
-	RevisePlotlines(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, plotlines, userSuggestion string) (string, error)
+	RevisePlotlines(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, polishedPlotlines, reviewSuggestions string) (string, error)
 }
 
 type defaultAgentExecutor struct{}
@@ -33,12 +33,12 @@ func (e *defaultAgentExecutor) GeneratePlotlines(ctx context.Context, chatModel 
 	return agents.GeneratePlotlines(ctx, agent, outline, genre)
 }
 
-func (e *defaultAgentExecutor) PolishPlotlines(ctx context.Context, chatModel einoModel.BaseChatModel, plotlines, genre string) (string, error) {
+func (e *defaultAgentExecutor) PolishPlotlines(ctx context.Context, chatModel einoModel.BaseChatModel, plotlines, genre, userSuggestion string) (string, error) {
 	agent, err := agents.NewPlotlinePolisherAgent(ctx, chatModel)
 	if err != nil {
 		return "", err
 	}
-	return agents.PolishPlotlines(ctx, agent, plotlines, genre)
+	return agents.PolishPlotlines(ctx, agent, plotlines, genre, userSuggestion)
 }
 
 func (e *defaultAgentExecutor) ReviewPlotlines(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, plotlines, userSuggestion string) (string, error) {
@@ -49,17 +49,17 @@ func (e *defaultAgentExecutor) ReviewPlotlines(ctx context.Context, chatModel ei
 	return agents.ReviewPlotlines(ctx, agent, outline, genre, plotlines, userSuggestion)
 }
 
-func (e *defaultAgentExecutor) RevisePlotlines(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, plotlines, userSuggestion string) (string, error) {
+func (e *defaultAgentExecutor) RevisePlotlines(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, polishedPlotlines, reviewSuggestions string) (string, error) {
 	agent, err := agents.NewPlotlineReviserAgent(ctx, chatModel)
 	if err != nil {
 		return "", err
 	}
-	return agents.RevisePlotlines(ctx, agent, outline, genre, plotlines, userSuggestion)
+	return agents.RevisePlotlines(ctx, agent, outline, genre, polishedPlotlines, reviewSuggestions)
 }
 
 func ensureAgentExecutor() error {
 	if agentExecutor == nil {
-		return fmt.Errorf("agent executor 未初始化")
+		return fmt.Errorf("agent executor is nil")
 	}
 	return nil
 }

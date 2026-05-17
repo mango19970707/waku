@@ -82,7 +82,8 @@ func TestPlotlineWorkflowGraph_QuickRevision(t *testing.T) {
 	require.NoError(t, err)
 
 	input := &compose.PlotlineWorkflowInput{
-		NovelID: 6,
+		NovelID:        6,
+		UserSuggestion: "新增主角和女主的感情线，他们逐渐从御兽关系转化为道侣关系",
 	}
 
 	result, _ := compose.ExecutePlotlineWorkflow(ctx, graph, input)

@@ -37,38 +37,18 @@ func initNode(novelRepo repository.Repository, plotlineRepo repository.PlotlineR
 			MaxRetries:     constant.MaxRetries,
 		}
 
-		if input.PlotlineID > 0 && input.UserSuggestion != "" {
+		if input.PlotlineID > 0 && input.NovelID == 0 {
 			plotline, err := plotlineRepo.GetByID(input.PlotlineID)
 			if err != nil {
-				err = fmt.Errorf("加载剧情线失败: %w", err)
-				return nil, err
+				return nil, fmt.Errorf("load plotline failed: %w", err)
 			}
-
-			novel, err := novelRepo.GetByID(plotline.NovelID)
-			if err != nil {
-				err = fmt.Errorf("加载所属小说失败: %w", err)
-				return nil, err
-			}
-
-			existingPlotlines, err := loadPlotlinesFromDB(plotlineRepo, novel.ID)
-			if err != nil {
-				return nil, err
-			}
-
-			state.NovelID = novel.ID
+			state.NovelID = plotline.NovelID
 			state.PlotlineID = plotline.ID
-			state.NovelName = novel.Title
-			state.Author = novel.Author
-			state.Genre = novel.Genre
-			state.Outline = extractOutlineContent(novel.Outline)
-			state.ExistingPlotlines = existingPlotlines
-			return state, nil
 		}
 
-		novel, err := novelRepo.GetByID(input.NovelID)
+		novel, err := novelRepo.GetByID(state.NovelID)
 		if err != nil {
-			err = fmt.Errorf("加载小说失败: %w", err)
-			return nil, err
+			return nil, fmt.Errorf("load novel failed: %w", err)
 		}
 
 		state.NovelID = novel.ID
@@ -94,7 +74,7 @@ func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(c
 			logNodeOutput(ctx, "generate", result, err)
 		}()
 
-		if state.GeneratedPlotlines != "" {
+		if !isEmptyStateData(state.GeneratedPlotlines) {
 			state.CurrentNode = "generate_success"
 			return state, nil
 		}
@@ -102,14 +82,14 @@ func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(c
 		content, err := loadStageFile(state.Author, state.NovelName, constant.StageGenerate)
 		if err != nil {
 			state.CurrentNode = "generate_failed"
-			state.ErrorMsg = fmt.Sprintf("加载生成阶段文件失败: %v", err)
+			state.ErrorMsg = fmt.Sprintf("load generate stage file failed: %v", err)
 			return state, nil
 		}
 		if content != "" {
-			normalized, _, err := contracts.NormalizePlotlinePayload(content)
+			normalized, err := plotlineStateFromRaw(content)
 			if err != nil {
 				state.CurrentNode = "generate_failed"
-				state.ErrorMsg = fmt.Sprintf("解析生成阶段数据失败: %v", err)
+				state.ErrorMsg = fmt.Sprintf("parse generate stage data failed: %v", err)
 				return state, nil
 			}
 			state.GeneratedPlotlines = normalized
@@ -125,10 +105,17 @@ func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(c
 			return state, nil
 		}
 
-		state.GeneratedPlotlines = generated
+		generatedState, err := plotlineStateFromRaw(generated)
+		if err != nil {
+			state.CurrentNode = "generate_failed"
+			state.ErrorMsg = fmt.Sprintf("parse generate stage data failed: %v", err)
+			return state, nil
+		}
+
+		state.GeneratedPlotlines = generatedState
 		if err := saveStageFile(state.Author, state.NovelName, constant.StageGenerate, generated); err != nil {
 			state.CurrentNode = "generate_failed"
-			state.ErrorMsg = fmt.Sprintf("保存生成阶段文件失败: %v", err)
+			state.ErrorMsg = fmt.Sprintf("save generate stage file failed: %v", err)
 			return state, nil
 		}
 
@@ -146,7 +133,7 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			logNodeOutput(ctx, "polish", result, err)
 		}()
 
-		if state.PolishedPlotlines != "" {
+		if !isEmptyStateData(state.PolishedPlotlines) {
 			state.CurrentNode = "polish_success"
 			return state, nil
 		}
@@ -154,14 +141,14 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 		content, err := loadStageFile(state.Author, state.NovelName, constant.StagePolish)
 		if err != nil {
 			state.CurrentNode = "polish_failed"
-			state.ErrorMsg = fmt.Sprintf("加载润色阶段文件失败: %v", err)
+			state.ErrorMsg = fmt.Sprintf("load polish stage file failed: %v", err)
 			return state, nil
 		}
 		if content != "" {
-			normalized, _, err := contracts.NormalizePlotlinePayload(content)
+			normalized, err := plotlineStateFromRaw(content)
 			if err != nil {
 				state.CurrentNode = "polish_failed"
-				state.ErrorMsg = fmt.Sprintf("解析润色阶段数据失败: %v", err)
+				state.ErrorMsg = fmt.Sprintf("parse polish stage data failed: %v", err)
 				return state, nil
 			}
 			state.PolishedPlotlines = normalized
@@ -171,26 +158,40 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 		}
 
 		source := state.GeneratedPlotlines
-		if source == "" {
+		if isEmptyStateData(source) {
 			source = state.ExistingPlotlines
 		}
-		if source == "" {
+		if isEmptyStateData(source) {
 			state.CurrentNode = "polish_failed"
-			state.ErrorMsg = "缺少待润色的剧情线数据"
+			state.ErrorMsg = "missing plotlines to polish"
 			return state, nil
 		}
 
-		polished, err := agentExecutor.PolishPlotlines(ctx, chatModel, source, state.Genre)
+		sourceRaw, err := plotlineStateToRaw(source)
+		if err != nil {
+			state.CurrentNode = "polish_failed"
+			state.ErrorMsg = fmt.Sprintf("marshal plotlines to polish failed: %v", err)
+			return state, nil
+		}
+
+		polished, err := agentExecutor.PolishPlotlines(ctx, chatModel, sourceRaw, state.Genre, state.UserSuggestion)
 		if err != nil {
 			state.CurrentNode = "polish_failed"
 			state.ErrorMsg = err.Error()
 			return state, nil
 		}
 
-		state.PolishedPlotlines = polished
+		polishedState, err := plotlineStateFromRaw(polished)
+		if err != nil {
+			state.CurrentNode = "polish_failed"
+			state.ErrorMsg = fmt.Sprintf("parse polish stage data failed: %v", err)
+			return state, nil
+		}
+
+		state.PolishedPlotlines = polishedState
 		if err := saveStageFile(state.Author, state.NovelName, constant.StagePolish, polished); err != nil {
 			state.CurrentNode = "polish_failed"
-			state.ErrorMsg = fmt.Sprintf("保存润色阶段文件失败: %v", err)
+			state.ErrorMsg = fmt.Sprintf("save polish stage file failed: %v", err)
 			return state, nil
 		}
 
@@ -208,7 +209,7 @@ func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			logNodeOutput(ctx, "review", result, err)
 		}()
 
-		if state.ReviewedPlotlines != "" {
+		if !isEmptyStateData(state.ReviewedPlotlines) {
 			state.CurrentNode = "review_success"
 			return state, nil
 		}
@@ -216,14 +217,14 @@ func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 		content, err := loadStageFile(state.Author, state.NovelName, constant.StageReview)
 		if err != nil {
 			state.CurrentNode = "review_failed"
-			state.ErrorMsg = fmt.Sprintf("加载审核阶段文件失败: %v", err)
+			state.ErrorMsg = fmt.Sprintf("load review stage file failed: %v", err)
 			return state, nil
 		}
 		if content != "" {
-			normalized, _, err := contracts.NormalizePlotlinePayload(content)
+			normalized, err := plotlineReviewStateFromRaw(content)
 			if err != nil {
 				state.CurrentNode = "review_failed"
-				state.ErrorMsg = fmt.Sprintf("解析审核阶段数据失败: %v", err)
+				state.ErrorMsg = fmt.Sprintf("parse review stage data failed: %v", err)
 				return state, nil
 			}
 			state.ReviewedPlotlines = normalized
@@ -232,17 +233,31 @@ func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			return state, nil
 		}
 
-		reviewed, err := agentExecutor.ReviewPlotlines(ctx, chatModel, state.Outline, state.Genre, state.PolishedPlotlines, state.UserSuggestion)
+		polishedRaw, err := plotlineStateToRaw(state.PolishedPlotlines)
+		if err != nil {
+			state.CurrentNode = "review_failed"
+			state.ErrorMsg = fmt.Sprintf("marshal plotlines to review failed: %v", err)
+			return state, nil
+		}
+
+		reviewed, err := agentExecutor.ReviewPlotlines(ctx, chatModel, state.Outline, state.Genre, polishedRaw, state.UserSuggestion)
 		if err != nil {
 			state.CurrentNode = "review_failed"
 			state.ErrorMsg = err.Error()
 			return state, nil
 		}
 
-		state.ReviewedPlotlines = reviewed
+		reviewedState, err := plotlineReviewStateFromRaw(reviewed)
+		if err != nil {
+			state.CurrentNode = "review_failed"
+			state.ErrorMsg = fmt.Sprintf("parse review stage data failed: %v", err)
+			return state, nil
+		}
+
+		state.ReviewedPlotlines = reviewedState
 		if err := saveStageFile(state.Author, state.NovelName, constant.StageReview, reviewed); err != nil {
 			state.CurrentNode = "review_failed"
-			state.ErrorMsg = fmt.Sprintf("保存审核阶段文件失败: %v", err)
+			state.ErrorMsg = fmt.Sprintf("save review stage file failed: %v", err)
 			return state, nil
 		}
 
@@ -260,7 +275,7 @@ func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			logNodeOutput(ctx, "revise", result, err)
 		}()
 
-		if state.RevisedPlotlines != "" {
+		if !isEmptyStateData(state.RevisedPlotlines) {
 			state.CurrentNode = "revise_success"
 			return state, nil
 		}
@@ -268,14 +283,14 @@ func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 		content, err := loadStageFile(state.Author, state.NovelName, constant.StageRevise)
 		if err != nil {
 			state.CurrentNode = "revise_failed"
-			state.ErrorMsg = fmt.Sprintf("加载修改阶段文件失败: %v", err)
+			state.ErrorMsg = fmt.Sprintf("load revise stage file failed: %v", err)
 			return state, nil
 		}
 		if content != "" {
-			normalized, _, err := contracts.NormalizePlotlinePayload(content)
+			normalized, err := plotlineStateFromRaw(content)
 			if err != nil {
 				state.CurrentNode = "revise_failed"
-				state.ErrorMsg = fmt.Sprintf("解析修改阶段数据失败: %v", err)
+				state.ErrorMsg = fmt.Sprintf("parse revise stage data failed: %v", err)
 				return state, nil
 			}
 			state.RevisedPlotlines = normalized
@@ -284,17 +299,37 @@ func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			return state, nil
 		}
 
-		revised, err := agentExecutor.RevisePlotlines(ctx, chatModel, state.Outline, state.Genre, state.ReviewedPlotlines, state.UserSuggestion)
+		polishedRaw, err := plotlineStateToRaw(state.PolishedPlotlines)
+		if err != nil {
+			state.CurrentNode = "revise_failed"
+			state.ErrorMsg = fmt.Sprintf("marshal polished plotlines failed: %v", err)
+			return state, nil
+		}
+		reviewedRaw, err := plotlineReviewStateToRaw(state.ReviewedPlotlines)
+		if err != nil {
+			state.CurrentNode = "revise_failed"
+			state.ErrorMsg = fmt.Sprintf("marshal review suggestions failed: %v", err)
+			return state, nil
+		}
+
+		revised, err := agentExecutor.RevisePlotlines(ctx, chatModel, state.Outline, state.Genre, polishedRaw, reviewedRaw)
 		if err != nil {
 			state.CurrentNode = "revise_failed"
 			state.ErrorMsg = err.Error()
 			return state, nil
 		}
 
-		state.RevisedPlotlines = revised
+		revisedState, err := plotlineStateFromRaw(revised)
+		if err != nil {
+			state.CurrentNode = "revise_failed"
+			state.ErrorMsg = fmt.Sprintf("parse revise stage data failed: %v", err)
+			return state, nil
+		}
+
+		state.RevisedPlotlines = revisedState
 		if err := saveStageFile(state.Author, state.NovelName, constant.StageRevise, revised); err != nil {
 			state.CurrentNode = "revise_failed"
-			state.ErrorMsg = fmt.Sprintf("保存修改阶段文件失败: %v", err)
+			state.ErrorMsg = fmt.Sprintf("save revise stage file failed: %v", err)
 			return state, nil
 		}
 
@@ -317,18 +352,18 @@ func saveToDBNode(plotlineRepo repository.PlotlineRepository) func(context.Conte
 			return state, nil
 		}
 
-		normalized, payload, err := contracts.NormalizePlotlinePayload(state.RevisedPlotlines)
+		normalizedState, payload, err := plotlineStateToPayload(state.RevisedPlotlines)
 		if err != nil {
 			state.CurrentNode = "save_failed"
-			state.ErrorMsg = fmt.Sprintf("最终剧情线格式无效: %v", err)
+			state.ErrorMsg = fmt.Sprintf("final plotlines format is invalid: %v", err)
 			return state, nil
 		}
-		state.RevisedPlotlines = normalized
+		state.RevisedPlotlines = normalizedState
 
 		existing, err := plotlineRepo.GetByNovelID(state.NovelID)
 		if err != nil {
 			state.CurrentNode = "save_failed"
-			state.ErrorMsg = fmt.Sprintf("加载现有剧情线失败: %v", err)
+			state.ErrorMsg = fmt.Sprintf("load existing plotlines failed: %v", err)
 			return state, nil
 		}
 
@@ -353,7 +388,7 @@ func saveToDBNode(plotlineRepo repository.PlotlineRepository) func(context.Conte
 				existingItem, ok := existingByID[plotlineModel.ID]
 				if !ok {
 					state.CurrentNode = "save_failed"
-					state.ErrorMsg = fmt.Sprintf("剧情线不存在: %d", plotlineModel.ID)
+					state.ErrorMsg = fmt.Sprintf("plotline not found: %d", plotlineModel.ID)
 					return state, nil
 				}
 
@@ -363,7 +398,7 @@ func saveToDBNode(plotlineRepo repository.PlotlineRepository) func(context.Conte
 				existingItem.Status = plotlineModel.Status
 				if err := plotlineRepo.Update(existingItem); err != nil {
 					state.CurrentNode = "save_failed"
-					state.ErrorMsg = fmt.Sprintf("更新剧情线失败: %v", err)
+					state.ErrorMsg = fmt.Sprintf("update plotline failed: %v", err)
 					return state, nil
 				}
 				seen[plotlineModel.ID] = struct{}{}
@@ -377,7 +412,7 @@ func saveToDBNode(plotlineRepo repository.PlotlineRepository) func(context.Conte
 		if len(created) > 0 {
 			if err := plotlineRepo.CreateBatch(created); err != nil {
 				state.CurrentNode = "save_failed"
-				state.ErrorMsg = fmt.Sprintf("创建剧情线失败: %v", err)
+				state.ErrorMsg = fmt.Sprintf("create plotlines failed: %v", err)
 				return state, nil
 			}
 			for _, item := range created {
@@ -392,7 +427,7 @@ func saveToDBNode(plotlineRepo repository.PlotlineRepository) func(context.Conte
 			}
 			if err := plotlineRepo.Delete(item.ID); err != nil {
 				state.CurrentNode = "save_failed"
-				state.ErrorMsg = fmt.Sprintf("删除旧剧情线失败: %v", err)
+				state.ErrorMsg = fmt.Sprintf("delete stale plotline failed: %v", err)
 				return state, nil
 			}
 		}
@@ -404,13 +439,13 @@ func saveToDBNode(plotlineRepo repository.PlotlineRepository) func(context.Conte
 	}
 }
 
-func loadPlotlinesFromDB(plotlineRepo repository.PlotlineRepository, novelID uint) (string, error) {
+func loadPlotlinesFromDB(plotlineRepo repository.PlotlineRepository, novelID uint) (map[string]any, error) {
 	plotlines, err := plotlineRepo.GetByNovelID(novelID)
 	if err != nil {
-		return "", fmt.Errorf("加载剧情线失败: %w", err)
+		return nil, fmt.Errorf("load plotlines failed: %w", err)
 	}
 	if len(plotlines) == 0 {
-		return "", nil
+		return nil, nil
 	}
 
 	items := make([]map[string]any, 0, len(plotlines))
@@ -420,9 +455,9 @@ func loadPlotlinesFromDB(plotlineRepo repository.PlotlineRepository, novelID uin
 
 	payload, _, err := contracts.BuildPlotlinePayload(items)
 	if err != nil {
-		return "", fmt.Errorf("构造剧情线 JSON 失败: %w", err)
+		return nil, fmt.Errorf("build plotlines JSON failed: %w", err)
 	}
-	return payload, nil
+	return plotlineStateFromRaw(payload)
 }
 
 func plotlineMapToModel(item map[string]any, novelID uint) (*model.Plotline, error) {
@@ -484,7 +519,7 @@ func loadStageFile(author, novelName, stage string) (string, error) {
 		if os.IsNotExist(err) {
 			return "", nil
 		}
-		return "", fmt.Errorf("读取阶段文件失败: %w", err)
+		return "", fmt.Errorf("read stage file failed: %w", err)
 	}
 
 	var payload plotlineFilePayload
@@ -497,7 +532,7 @@ func loadStageFile(author, novelName, stage string) (string, error) {
 func saveStageFile(author, novelName, stage, content string) error {
 	filePath := stageFilePath(author, novelName, stage)
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
-		return fmt.Errorf("创建阶段目录失败: %w", err)
+		return fmt.Errorf("create stage directory failed: %w", err)
 	}
 
 	payload := plotlineFilePayload{
@@ -508,10 +543,10 @@ func saveStageFile(author, novelName, stage, content string) error {
 
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
-		return fmt.Errorf("序列化阶段文件失败: %w", err)
+		return fmt.Errorf("marshal stage file failed: %w", err)
 	}
 	if err := os.WriteFile(filePath, data, 0o644); err != nil {
-		return fmt.Errorf("写入阶段文件失败: %w", err)
+		return fmt.Errorf("write stage file failed: %w", err)
 	}
 	return nil
 }
@@ -526,4 +561,86 @@ func projectRootDir() string {
 		return "."
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+}
+
+func isEmptyStateData(data map[string]any) bool {
+	return len(data) == 0
+}
+
+func plotlineStateFromRaw(raw string) (map[string]any, error) {
+	normalized, _, err := contracts.NormalizePlotlinePayload(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	var state map[string]any
+	if err := json.Unmarshal([]byte(normalized), &state); err != nil {
+		return nil, fmt.Errorf("unmarshal plotline state failed: %w", err)
+	}
+	return state, nil
+}
+
+func plotlineStateToRaw(data map[string]any) (string, error) {
+	if isEmptyStateData(data) {
+		return "", nil
+	}
+
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return "", fmt.Errorf("marshal plotline state failed: %w", err)
+	}
+
+	normalized, _, err := contracts.NormalizePlotlinePayload(string(raw))
+	if err != nil {
+		return "", err
+	}
+	return normalized, nil
+}
+
+func plotlineStateToPayload(data map[string]any) (map[string]any, *contracts.PlotlinePayload, error) {
+	raw, err := plotlineStateToRaw(data)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var normalized map[string]any
+	if err := json.Unmarshal([]byte(raw), &normalized); err != nil {
+		return nil, nil, fmt.Errorf("unmarshal plotline state failed: %w", err)
+	}
+
+	_, payload, err := contracts.NormalizePlotlinePayload(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	return normalized, payload, nil
+}
+
+func plotlineReviewStateFromRaw(raw string) (map[string]any, error) {
+	normalized, _, err := contracts.NormalizePlotlineReviewPayload(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	var state map[string]any
+	if err := json.Unmarshal([]byte(normalized), &state); err != nil {
+		return nil, fmt.Errorf("unmarshal plotline review state failed: %w", err)
+	}
+	return state, nil
+}
+
+func plotlineReviewStateToRaw(data map[string]any) (string, error) {
+	if isEmptyStateData(data) {
+		return "", nil
+	}
+
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return "", fmt.Errorf("marshal plotline review state failed: %w", err)
+	}
+
+	normalized, _, err := contracts.NormalizePlotlineReviewPayload(string(raw))
+	if err != nil {
+		return "", err
+	}
+	return normalized, nil
 }

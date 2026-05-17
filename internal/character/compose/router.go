@@ -8,7 +8,7 @@ import (
 )
 
 func routeAfterInit(ctx context.Context, state *CharacterWorkflowState) (string, error) {
-	if state.CharacterID > 0 && state.UserSuggestion != "" {
+	if state.NovelID > 0 && state.UserSuggestion != "" {
 		return "polish", nil
 	}
 	if state.NovelID > 0 {

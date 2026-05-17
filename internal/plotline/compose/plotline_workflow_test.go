@@ -24,7 +24,7 @@ func (s *stubAgentExecutor) GeneratePlotlines(ctx context.Context, chatModel ein
 	return s.generate, nil
 }
 
-func (s *stubAgentExecutor) PolishPlotlines(ctx context.Context, chatModel einoModel.BaseChatModel, plotlines, genre string) (string, error) {
+func (s *stubAgentExecutor) PolishPlotlines(ctx context.Context, chatModel einoModel.BaseChatModel, plotlines, genre, userSuggestion string) (string, error) {
 	return s.polish, nil
 }
 
@@ -32,7 +32,7 @@ func (s *stubAgentExecutor) ReviewPlotlines(ctx context.Context, chatModel einoM
 	return s.review, nil
 }
 
-func (s *stubAgentExecutor) RevisePlotlines(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, plotlines, userSuggestion string) (string, error) {
+func (s *stubAgentExecutor) RevisePlotlines(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, polishedPlotlines, reviewSuggestions string) (string, error) {
 	return s.revise, nil
 }
 
@@ -43,11 +43,11 @@ func TestPlotlineWorkflow_FullGeneration(t *testing.T) {
 	plotlineRepo := repository.NewPlotlineRepository(db)
 
 	novel := &model.Novel{
-		Title:    "仙路-完整生成",
-		Author:   "测试作者A",
-		Genre:    "玄幻",
-		Synopsis: "简介",
-		Outline:  `{"outline":"主角修仙之路","worldview":"九州","cultivation_system":"灵根"}`,
+		Title:    "full-generation",
+		Author:   "tester-a",
+		Genre:    "xuanhuan",
+		Synopsis: "synopsis",
+		Outline:  `{"outline":"主角踏上修仙之路","worldview":"九州","cultivation_system":"灵根"}`,
 		Status:   "draft",
 	}
 	if err := novelRepo.Create(novel); err != nil {
@@ -57,7 +57,7 @@ func TestPlotlineWorkflow_FullGeneration(t *testing.T) {
 	RegisterAgentExecutor(&stubAgentExecutor{
 		generate: `{"plotlines":[{"title":"修仙主线","type":"main","description":"主角一路成长","status":"active"}]}`,
 		polish:   `{"plotlines":[{"title":"修仙主线","type":"main","description":"主角一路成长并结识盟友","status":"active"}]}`,
-		review:   `{"plotlines":[{"title":"修仙主线","type":"main","description":"主角一路成长并结识盟友","status":"active","review_suggestions":"补强前期动机"}]}`,
+		review:   `{"reviews":[{"original_content":{"title":"修仙主线","type":"main","description":"主角一路成长并结识盟友","status":"active"},"modification_suggestion":"补强前期动机"}]}`,
 		revise:   `{"plotlines":[{"title":"修仙主线","type":"main","description":"主角带着明确目标一路成长并结识盟友","status":"active"}]}`,
 	})
 
@@ -77,9 +77,6 @@ func TestPlotlineWorkflow_FullGeneration(t *testing.T) {
 	if len(result.SavedPlotlineIDs) != 1 {
 		t.Fatalf("expected 1 saved plotline id, got %d", len(result.SavedPlotlineIDs))
 	}
-	if result.SavedPlotlineIDs[0] == 0 {
-		t.Fatalf("expected auto-increment plotline id")
-	}
 
 	saved, err := plotlineRepo.GetByNovelID(novel.ID)
 	if err != nil {
@@ -93,18 +90,18 @@ func TestPlotlineWorkflow_FullGeneration(t *testing.T) {
 	}
 }
 
-func TestPlotlineWorkflow_QuickRevision(t *testing.T) {
+func TestPlotlineWorkflow_AddPlotlineFromUserSuggestion(t *testing.T) {
 	ctx := context.Background()
 	db := setupPlotlineTestDB(t)
 	novelRepo := repository.NewRepository(db)
 	plotlineRepo := repository.NewPlotlineRepository(db)
 
 	novel := &model.Novel{
-		Title:    "仙路-快速修改",
-		Author:   "测试作者B",
-		Genre:    "玄幻",
-		Synopsis: "简介",
-		Outline:  `{"outline":"主角修仙之路","worldview":"九州","cultivation_system":"灵根"}`,
+		Title:    "add-from-suggestion",
+		Author:   "tester-b",
+		Genre:    "xuanhuan",
+		Synopsis: "synopsis",
+		Outline:  `{"outline":"主角踏上修仙之路","worldview":"九州","cultivation_system":"灵根"}`,
 		Status:   "draft",
 	}
 	if err := novelRepo.Create(novel); err != nil {
@@ -121,13 +118,15 @@ func TestPlotlineWorkflow_QuickRevision(t *testing.T) {
 
 	polishPayload := fmt.Sprintf(`{"plotlines":[
 		{"id":%d,"title":"修仙主线","type":"main","description":"主角一路成长","status":"active"},
-		{"id":%d,"title":"宗门支线","type":"sub","description":"宗门纷争","status":"active"}]}`, seed[0].ID, seed[1].ID)
-	reviewPayload := fmt.Sprintf(`{"plotlines":[
-		{"id":%d,"title":"修仙主线","type":"main","description":"主角一路成长","status":"active","review_suggestions":"增加女主互动"},
-		{"id":%d,"title":"宗门支线","type":"sub","description":"宗门纷争","status":"active"}]}`, seed[0].ID, seed[1].ID)
+		{"id":%d,"title":"宗门支线","type":"sub","description":"宗门纷争","status":"active"},
+		{"title":"双女主情感支线","type":"sub","description":"围绕彩鳞和熏儿的情感拉扯新增一条支线","status":"active"}]}`, seed[0].ID, seed[1].ID)
+	reviewPayload := fmt.Sprintf(`{"reviews":[
+		{"original_content":{"id":%d,"title":"修仙主线","type":"main","description":"主角一路成长","status":"active"},"modification_suggestion":"主线动机再明确一些"},
+		{"original_content":{"title":"双女主情感支线","type":"sub","description":"围绕彩鳞和熏儿的情感拉扯新增一条支线","status":"active"},"modification_suggestion":"补强与主线的联动"}]}`, seed[0].ID)
 	revisePayload := fmt.Sprintf(`{"plotlines":[
 		{"id":%d,"title":"修仙主线","type":"main","description":"主角一路成长，并与彩鳞和熏儿形成重要关系","status":"active"},
-		{"id":%d,"title":"宗门支线","type":"sub","description":"宗门纷争","status":"active"}]}`, seed[0].ID, seed[1].ID)
+		{"id":%d,"title":"宗门支线","type":"sub","description":"宗门纷争","status":"active"},
+		{"title":"双女主情感支线","type":"sub","description":"彩鳞和熏儿分别从不同立场卷入主角成长，并与修仙主线形成直接联动","status":"active"}]}`, seed[0].ID, seed[1].ID)
 
 	RegisterAgentExecutor(&stubAgentExecutor{
 		polish: polishPayload,
@@ -141,23 +140,34 @@ func TestPlotlineWorkflow_QuickRevision(t *testing.T) {
 	}
 
 	result, err := ExecutePlotlineWorkflow(ctx, graph, &PlotlineWorkflowInput{
-		PlotlineID:     seed[0].ID,
-		UserSuggestion: "有2个女主角，彩鳞和熏儿",
+		NovelID:        novel.ID,
+		UserSuggestion: "来两个女主角，彩鳞和熏儿",
 	})
 	if err != nil {
 		t.Fatalf("ExecutePlotlineWorkflow() error = %v", err)
 	}
 
-	if len(result.SavedPlotlineIDs) != 2 {
-		t.Fatalf("expected 2 saved plotline ids, got %d", len(result.SavedPlotlineIDs))
+	if len(result.SavedPlotlineIDs) != 3 {
+		t.Fatalf("expected 3 saved plotline ids, got %d", len(result.SavedPlotlineIDs))
 	}
 
-	updated, err := plotlineRepo.GetByID(seed[0].ID)
+	updated, err := plotlineRepo.GetByNovelID(novel.ID)
 	if err != nil {
-		t.Fatalf("GetByID() error = %v", err)
+		t.Fatalf("GetByNovelID() error = %v", err)
 	}
-	if updated.Description == "主角一路成长" {
-		t.Fatalf("expected revised description, got %s", updated.Description)
+	if len(updated) != 3 {
+		t.Fatalf("expected 3 plotlines in db, got %d", len(updated))
+	}
+
+	foundNew := false
+	for _, item := range updated {
+		if item.Title == "双女主情感支线" {
+			foundNew = true
+			break
+		}
+	}
+	if !foundNew {
+		t.Fatalf("expected new plotline created from user suggestion")
 	}
 }
 

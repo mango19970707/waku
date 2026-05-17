@@ -11,6 +11,15 @@ type CharacterPayload struct {
 	Characters []map[string]any `json:"characters"`
 }
 
+type CharacterReviewSuggestion struct {
+	OriginalContent        map[string]any `json:"original_content"`
+	ModificationSuggestion string         `json:"modification_suggestion"`
+}
+
+type CharacterReviewPayload struct {
+	Suggestions []CharacterReviewSuggestion `json:"suggestions"`
+}
+
 func NormalizeCharacterPayload(raw string) (string, *CharacterPayload, error) {
 	var payload CharacterPayload
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
@@ -95,6 +104,37 @@ func BuildCharacterPayload(characters []map[string]any) (string, *CharacterPaylo
 		return "", nil, fmt.Errorf("构造 characters JSON 失败: %w", err)
 	}
 	return NormalizeCharacterPayload(string(data))
+}
+
+func NormalizeCharacterReviewPayload(raw string) (string, *CharacterReviewPayload, error) {
+	var payload CharacterReviewPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return "", nil, fmt.Errorf("解析 review suggestions JSON 失败: %w", err)
+	}
+	if payload.Suggestions == nil {
+		return "", nil, fmt.Errorf("suggestions 不能为空")
+	}
+
+	for i, item := range payload.Suggestions {
+		if item.OriginalContent == nil {
+			return "", nil, fmt.Errorf("第%d条修改意见的 original_content 不能为空", i+1)
+		}
+		if _, err := CharacterMapToModel(item.OriginalContent, 0); err != nil {
+			return "", nil, fmt.Errorf("第%d条修改意见的 original_content 无效: %w", i+1, err)
+		}
+
+		item.ModificationSuggestion = strings.TrimSpace(item.ModificationSuggestion)
+		if item.ModificationSuggestion == "" {
+			return "", nil, fmt.Errorf("第%d条修改意见的 modification_suggestion 不能为空", i+1)
+		}
+		payload.Suggestions[i] = item
+	}
+
+	normalized, err := json.Marshal(&payload)
+	if err != nil {
+		return "", nil, fmt.Errorf("序列化 review suggestions JSON 失败: %w", err)
+	}
+	return string(normalized), &payload, nil
 }
 
 func CharacterMapToModel(item map[string]any, novelID uint) (*model.Character, error) {

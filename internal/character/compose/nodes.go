@@ -58,7 +58,7 @@ func initNode(novelRepo repository.Repository, characterRepo repository.Characte
 
 func extractNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
 	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
-		if state.ExtractedCharacters != "" {
+		if !isEmptyPayload(state.ExtractedCharacters) {
 			state.CurrentNode = "extract_success"
 			return state, nil
 		}
@@ -70,27 +70,41 @@ func extractNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(co
 			return state, nil
 		}
 		if content != "" {
-			normalized, _, err := contracts.NormalizeCharacterPayload(content)
+			payload, err := parseCharacterPayloadMap(content)
 			if err != nil {
 				state.CurrentNode = "extract_failed"
 				state.ErrorMsg = fmt.Sprintf("解析提取阶段数据失败: %v", err)
 				return state, nil
 			}
-			state.ExtractedCharacters = normalized
+			state.ExtractedCharacters = payload
 			state.CurrentNode = "extract_success"
 			state.RetryCount = 0
 			return state, nil
 		}
 
-		extracted, err := agentExecutor.ExtractCharacters(ctx, chatModel, state.Outline, state.Genre, state.ExistingCharacters)
+		existingJSON, err := marshalPayload(state.ExistingCharacters)
+		if err != nil {
+			state.CurrentNode = "extract_failed"
+			state.ErrorMsg = fmt.Sprintf("序列化已有角色失败: %v", err)
+			return state, nil
+		}
+
+		extracted, err := agentExecutor.ExtractCharacters(ctx, chatModel, state.Outline, state.Genre, existingJSON)
 		if err != nil {
 			state.CurrentNode = "extract_failed"
 			state.ErrorMsg = err.Error()
 			return state, nil
 		}
 
-		state.ExtractedCharacters = extracted
-		if err := saveStageFile(state.Author, state.NovelName, constant.StageExtract, extracted); err != nil {
+		payload, err := parseCharacterPayloadMap(extracted)
+		if err != nil {
+			state.CurrentNode = "extract_failed"
+			state.ErrorMsg = fmt.Sprintf("解析提取结果失败: %v", err)
+			return state, nil
+		}
+
+		state.ExtractedCharacters = payload
+		if err := saveStageMap(state.Author, state.NovelName, constant.StageExtract, payload); err != nil {
 			state.CurrentNode = "extract_failed"
 			state.ErrorMsg = fmt.Sprintf("保存提取阶段文件失败: %v", err)
 			return state, nil
@@ -104,7 +118,7 @@ func extractNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(co
 
 func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
 	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
-		if state.PolishedCharacters != "" {
+		if !isEmptyPayload(state.PolishedCharacters) {
 			state.CurrentNode = "polish_success"
 			return state, nil
 		}
@@ -116,37 +130,51 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			return state, nil
 		}
 		if content != "" {
-			normalized, _, err := contracts.NormalizeCharacterPayload(content)
+			payload, err := parseCharacterPayloadMap(content)
 			if err != nil {
 				state.CurrentNode = "polish_failed"
 				state.ErrorMsg = fmt.Sprintf("解析润色阶段数据失败: %v", err)
 				return state, nil
 			}
-			state.PolishedCharacters = normalized
+			state.PolishedCharacters = payload
 			state.CurrentNode = "polish_success"
 			state.RetryCount = 0
 			return state, nil
 		}
 
 		source := state.ExtractedCharacters
-		if source == "" {
+		if isEmptyPayload(source) {
 			source = state.ExistingCharacters
 		}
-		if source == "" {
+		if isEmptyPayload(source) {
 			state.CurrentNode = "polish_failed"
 			state.ErrorMsg = "缺少待润色的角色数据"
 			return state, nil
 		}
 
-		polished, err := agentExecutor.PolishCharacters(ctx, chatModel, state.Outline, state.Genre, source, state.UserSuggestion)
+		sourceJSON, err := marshalPayload(source)
+		if err != nil {
+			state.CurrentNode = "polish_failed"
+			state.ErrorMsg = fmt.Sprintf("序列化润色输入失败: %v", err)
+			return state, nil
+		}
+
+		polished, err := agentExecutor.PolishCharacters(ctx, chatModel, state.Outline, state.Genre, sourceJSON, state.UserSuggestion)
 		if err != nil {
 			state.CurrentNode = "polish_failed"
 			state.ErrorMsg = err.Error()
 			return state, nil
 		}
 
-		state.PolishedCharacters = polished
-		if err := saveStageFile(state.Author, state.NovelName, constant.StagePolish, polished); err != nil {
+		payload, err := parseCharacterPayloadMap(polished)
+		if err != nil {
+			state.CurrentNode = "polish_failed"
+			state.ErrorMsg = fmt.Sprintf("解析润色结果失败: %v", err)
+			return state, nil
+		}
+
+		state.PolishedCharacters = payload
+		if err := saveStageMap(state.Author, state.NovelName, constant.StagePolish, payload); err != nil {
 			state.CurrentNode = "polish_failed"
 			state.ErrorMsg = fmt.Sprintf("保存润色阶段文件失败: %v", err)
 			return state, nil
@@ -160,7 +188,7 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 
 func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
 	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
-		if state.ReviewedCharacters != "" {
+		if !isEmptyPayload(state.ReviewedCharacters) {
 			state.CurrentNode = "review_success"
 			return state, nil
 		}
@@ -172,27 +200,47 @@ func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			return state, nil
 		}
 		if content != "" {
-			normalized, _, err := contracts.NormalizeCharacterPayload(content)
+			payload, err := parseReviewPayloadMap(content)
 			if err != nil {
 				state.CurrentNode = "review_failed"
 				state.ErrorMsg = fmt.Sprintf("解析审核阶段数据失败: %v", err)
 				return state, nil
 			}
-			state.ReviewedCharacters = normalized
+			state.ReviewedCharacters = payload
 			state.CurrentNode = "review_success"
 			state.RetryCount = 0
 			return state, nil
 		}
 
-		reviewed, err := agentExecutor.ReviewCharacters(ctx, chatModel, state.Outline, state.Genre, state.PolishedCharacters, state.UserSuggestion)
+		if isEmptyPayload(state.PolishedCharacters) {
+			state.CurrentNode = "review_failed"
+			state.ErrorMsg = "缺少待审核的角色数据"
+			return state, nil
+		}
+
+		polishedJSON, err := marshalPayload(state.PolishedCharacters)
+		if err != nil {
+			state.CurrentNode = "review_failed"
+			state.ErrorMsg = fmt.Sprintf("序列化审核输入失败: %v", err)
+			return state, nil
+		}
+
+		reviewed, err := agentExecutor.ReviewCharacters(ctx, chatModel, state.Outline, state.Genre, polishedJSON)
 		if err != nil {
 			state.CurrentNode = "review_failed"
 			state.ErrorMsg = err.Error()
 			return state, nil
 		}
 
-		state.ReviewedCharacters = reviewed
-		if err := saveStageFile(state.Author, state.NovelName, constant.StageReview, reviewed); err != nil {
+		payload, err := parseReviewPayloadMap(reviewed)
+		if err != nil {
+			state.CurrentNode = "review_failed"
+			state.ErrorMsg = fmt.Sprintf("解析审核结果失败: %v", err)
+			return state, nil
+		}
+
+		state.ReviewedCharacters = payload
+		if err := saveStageMap(state.Author, state.NovelName, constant.StageReview, payload); err != nil {
 			state.CurrentNode = "review_failed"
 			state.ErrorMsg = fmt.Sprintf("保存审核阶段文件失败: %v", err)
 			return state, nil
@@ -206,7 +254,7 @@ func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 
 func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
 	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
-		if state.RevisedCharacters != "" {
+		if !isEmptyPayload(state.RevisedCharacters) {
 			state.CurrentNode = "revise_success"
 			return state, nil
 		}
@@ -218,27 +266,58 @@ func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			return state, nil
 		}
 		if content != "" {
-			normalized, _, err := contracts.NormalizeCharacterPayload(content)
+			payload, err := parseCharacterPayloadMap(content)
 			if err != nil {
 				state.CurrentNode = "revise_failed"
 				state.ErrorMsg = fmt.Sprintf("解析修改阶段数据失败: %v", err)
 				return state, nil
 			}
-			state.RevisedCharacters = normalized
+			state.RevisedCharacters = payload
 			state.CurrentNode = "revise_success"
 			state.RetryCount = 0
 			return state, nil
 		}
 
-		revised, err := agentExecutor.ReviseCharacters(ctx, chatModel, state.Outline, state.Genre, state.ReviewedCharacters, state.UserSuggestion)
+		if isEmptyPayload(state.PolishedCharacters) {
+			state.CurrentNode = "revise_failed"
+			state.ErrorMsg = "缺少待修改的角色数据"
+			return state, nil
+		}
+		if isEmptyPayload(state.ReviewedCharacters) {
+			state.CurrentNode = "revise_failed"
+			state.ErrorMsg = "缺少审核修改意见"
+			return state, nil
+		}
+
+		polishedJSON, err := marshalPayload(state.PolishedCharacters)
+		if err != nil {
+			state.CurrentNode = "revise_failed"
+			state.ErrorMsg = fmt.Sprintf("序列化修改输入失败: %v", err)
+			return state, nil
+		}
+		reviewJSON, err := marshalPayload(state.ReviewedCharacters)
+		if err != nil {
+			state.CurrentNode = "revise_failed"
+			state.ErrorMsg = fmt.Sprintf("序列化审核意见失败: %v", err)
+			return state, nil
+		}
+
+		revised, err := agentExecutor.ReviseCharacters(ctx, chatModel, state.Outline, state.Genre, polishedJSON, reviewJSON)
 		if err != nil {
 			state.CurrentNode = "revise_failed"
 			state.ErrorMsg = err.Error()
 			return state, nil
 		}
 
-		state.RevisedCharacters = revised
-		if err := saveStageFile(state.Author, state.NovelName, constant.StageRevise, revised); err != nil {
+		payload, err := parseCharacterPayloadMap(revised)
+		if err != nil {
+			state.CurrentNode = "revise_failed"
+			state.ErrorMsg = fmt.Sprintf("解析修改结果失败: %v", err)
+			return state, nil
+		}
+
+		state.RevisedCharacters = payload
+		if err := saveStageMap(state.Author, state.NovelName, constant.StageRevise, payload); err != nil {
 			state.CurrentNode = "revise_failed"
 			state.ErrorMsg = fmt.Sprintf("保存修改阶段文件失败: %v", err)
 			return state, nil
@@ -257,13 +336,27 @@ func saveToDBNode(characterRepo repository.CharacterRepository) func(context.Con
 			return state, nil
 		}
 
-		normalized, payload, err := contracts.NormalizeCharacterPayload(state.RevisedCharacters)
+		revisedJSON, err := marshalPayload(state.RevisedCharacters)
+		if err != nil {
+			state.CurrentNode = "save_failed"
+			state.ErrorMsg = fmt.Sprintf("序列化最终角色失败: %v", err)
+			return state, nil
+		}
+
+		normalized, payload, err := contracts.NormalizeCharacterPayload(revisedJSON)
 		if err != nil {
 			state.CurrentNode = "save_failed"
 			state.ErrorMsg = fmt.Sprintf("最终角色格式无效: %v", err)
 			return state, nil
 		}
-		state.RevisedCharacters = normalized
+
+		revisedMap, err := parseCharacterPayloadMap(normalized)
+		if err != nil {
+			state.CurrentNode = "save_failed"
+			state.ErrorMsg = fmt.Sprintf("解析最终角色失败: %v", err)
+			return state, nil
+		}
+		state.RevisedCharacters = revisedMap
 
 		existing, err := characterRepo.GetByNovelID(state.NovelID)
 		if err != nil {
@@ -349,13 +442,13 @@ func saveToDBNode(characterRepo repository.CharacterRepository) func(context.Con
 	}
 }
 
-func loadCharactersFromDB(characterRepo repository.CharacterRepository, novelID uint) (string, error) {
+func loadCharactersFromDB(characterRepo repository.CharacterRepository, novelID uint) (map[string]any, error) {
 	characters, err := characterRepo.GetByNovelID(novelID)
 	if err != nil {
-		return "", fmt.Errorf("加载角色失败: %w", err)
+		return nil, fmt.Errorf("加载角色失败: %w", err)
 	}
 	if len(characters) == 0 {
-		return "", nil
+		return nil, nil
 	}
 
 	items := make([]map[string]any, 0, len(characters))
@@ -365,9 +458,9 @@ func loadCharactersFromDB(characterRepo repository.CharacterRepository, novelID 
 
 	payload, _, err := contracts.BuildCharacterPayload(items)
 	if err != nil {
-		return "", fmt.Errorf("构造角色 JSON 失败: %w", err)
+		return nil, fmt.Errorf("构造角色 JSON 失败: %w", err)
 	}
-	return payload, nil
+	return parseCharacterPayloadMap(payload)
 }
 
 func extractOutlineContent(raw string) string {
@@ -399,6 +492,14 @@ func loadStageFile(author, novelName, stage string) (string, error) {
 		return payload.Content, nil
 	}
 	return string(content), nil
+}
+
+func saveStageMap(author, novelName, stage string, payload map[string]any) error {
+	content, err := marshalPayload(payload)
+	if err != nil {
+		return err
+	}
+	return saveStageFile(author, novelName, stage, content)
 }
 
 func saveStageFile(author, novelName, stage, content string) error {
@@ -433,4 +534,46 @@ func projectRootDir() string {
 		return "."
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+}
+
+func isEmptyPayload(payload map[string]any) bool {
+	return len(payload) == 0
+}
+
+func marshalPayload(payload map[string]any) (string, error) {
+	if len(payload) == 0 {
+		return "", nil
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func parseCharacterPayloadMap(raw string) (map[string]any, error) {
+	normalized, _, err := contracts.NormalizeCharacterPayload(raw)
+	if err != nil {
+		return nil, err
+	}
+	return unmarshalPayloadMap(normalized)
+}
+
+func parseReviewPayloadMap(raw string) (map[string]any, error) {
+	normalized, _, err := contracts.NormalizeCharacterReviewPayload(raw)
+	if err != nil {
+		return nil, err
+	}
+	return unmarshalPayloadMap(normalized)
+}
+
+func unmarshalPayloadMap(raw string) (map[string]any, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }

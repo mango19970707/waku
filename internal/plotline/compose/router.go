@@ -8,13 +8,13 @@ import (
 )
 
 func routeAfterInit(ctx context.Context, state *PlotlineWorkflowState) (string, error) {
-	if state.PlotlineID > 0 && state.UserSuggestion != "" {
+	if state.NovelID > 0 && state.UserSuggestion != "" {
 		return "polish", nil
 	}
 	if state.NovelID > 0 {
 		return "generate", nil
 	}
-	return compose.END, fmt.Errorf("输入参数不足，无法确定剧情线工作流模式")
+	return compose.END, fmt.Errorf("insufficient input for plotline workflow")
 }
 
 func routeAfterGenerate(ctx context.Context, state *PlotlineWorkflowState) (string, error) {
@@ -42,7 +42,7 @@ func routeWithRetry(state *PlotlineWorkflowState, successNode, nextNode, retryNo
 		return nextNode, nil
 	}
 	if state.RetryCount >= state.MaxRetries {
-		return compose.END, fmt.Errorf("%s 失败: %s", retryNode, state.ErrorMsg)
+		return compose.END, fmt.Errorf("%s failed: %s", retryNode, state.ErrorMsg)
 	}
 
 	state.RetryCount++

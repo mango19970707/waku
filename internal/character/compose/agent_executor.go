@@ -11,8 +11,8 @@ import (
 type AgentExecutor interface {
 	ExtractCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, existingCharacters string) (string, error)
 	PolishCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters, userSuggestion string) (string, error)
-	ReviewCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters, userSuggestion string) (string, error)
-	ReviseCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters, userSuggestion string) (string, error)
+	ReviewCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters string) (string, error)
+	ReviseCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters, reviewSuggestions string) (string, error)
 }
 
 type defaultAgentExecutor struct{}
@@ -46,18 +46,18 @@ func (e *defaultAgentExecutor) PolishCharacters(ctx context.Context, chatModel e
 	return agents.PolishCharacters(ctx, agent, outline, genre, characters, userSuggestion)
 }
 
-func (e *defaultAgentExecutor) ReviewCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters, userSuggestion string) (string, error) {
+func (e *defaultAgentExecutor) ReviewCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters string) (string, error) {
 	agent, err := agents.NewCharacterReviewerAgent(ctx, chatModel)
 	if err != nil {
 		return "", err
 	}
-	return agents.ReviewCharacters(ctx, agent, outline, genre, characters, userSuggestion)
+	return agents.ReviewCharacters(ctx, agent, outline, genre, characters)
 }
 
-func (e *defaultAgentExecutor) ReviseCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters, userSuggestion string) (string, error) {
+func (e *defaultAgentExecutor) ReviseCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters, reviewSuggestions string) (string, error) {
 	agent, err := agents.NewCharacterReviserAgent(ctx, chatModel)
 	if err != nil {
 		return "", err
 	}
-	return agents.ReviseCharacters(ctx, agent, outline, genre, characters, userSuggestion)
+	return agents.ReviseCharacters(ctx, agent, outline, genre, characters, reviewSuggestions)
 }

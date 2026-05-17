@@ -2,6 +2,7 @@ package compose
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 )
 
@@ -73,11 +74,11 @@ func logStateNodeInput(ctx context.Context, node string, state *PlotlineWorkflow
 		"genre", trimForLog(state.Genre),
 		"outline", shortPreview(state.Outline),
 		"user_suggestion", shortPreview(state.UserSuggestion),
-		"existing_chars", len([]rune(state.ExistingPlotlines)),
-		"generated_chars", len([]rune(state.GeneratedPlotlines)),
-		"polished_chars", len([]rune(state.PolishedPlotlines)),
-		"reviewed_chars", len([]rune(state.ReviewedPlotlines)),
-		"revised_chars", len([]rune(state.RevisedPlotlines)),
+		"existing_chars", stateDataChars(state.ExistingPlotlines),
+		"generated_chars", stateDataChars(state.GeneratedPlotlines),
+		"polished_chars", stateDataChars(state.PolishedPlotlines),
+		"reviewed_chars", stateDataChars(state.ReviewedPlotlines),
+		"revised_chars", stateDataChars(state.RevisedPlotlines),
 		"saved_plotline_ids", state.SavedPlotlineIDs,
 		"retry_count", state.RetryCount,
 	)
@@ -97,11 +98,11 @@ func logNodeOutput(ctx context.Context, node string, state *PlotlineWorkflowStat
 		"plotline_id", state.PlotlineID,
 		"novel_name", trimForLog(state.NovelName),
 		"outline", shortPreview(state.Outline),
-		"existing_chars", len([]rune(state.ExistingPlotlines)),
-		"generated_chars", len([]rune(state.GeneratedPlotlines)),
-		"polished_chars", len([]rune(state.PolishedPlotlines)),
-		"reviewed_chars", len([]rune(state.ReviewedPlotlines)),
-		"revised_chars", len([]rune(state.RevisedPlotlines)),
+		"existing_chars", stateDataChars(state.ExistingPlotlines),
+		"generated_chars", stateDataChars(state.GeneratedPlotlines),
+		"polished_chars", stateDataChars(state.PolishedPlotlines),
+		"reviewed_chars", stateDataChars(state.ReviewedPlotlines),
+		"revised_chars", stateDataChars(state.RevisedPlotlines),
 		"saved_plotline_ids", state.SavedPlotlineIDs,
 		"retry_count", state.RetryCount,
 		"error_msg", trimForLog(state.ErrorMsg),
@@ -111,34 +112,39 @@ func logNodeOutput(ctx context.Context, node string, state *PlotlineWorkflowStat
 
 func shortPreview(text string) string {
 	const maxRunes = 48
-
 	if text == "" {
 		return ""
 	}
-
 	runes := []rune(text)
 	if len(runes) <= maxRunes {
 		return text
 	}
-
 	return string(runes[:maxRunes]) + "..."
 }
 
 func summarizeText(text string) string {
 	const maxRunes = 120
-
 	if text == "" {
 		return ""
 	}
-
 	runes := []rune(text)
 	if len(runes) <= maxRunes {
 		return text
 	}
-
 	return string(runes[:maxRunes]) + "..."
 }
 
 func trimForLog(text string) string {
 	return summarizeText(text)
+}
+
+func stateDataChars(data map[string]any) int {
+	if len(data) == 0 {
+		return 0
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return 0
+	}
+	return len([]rune(string(raw)))
 }

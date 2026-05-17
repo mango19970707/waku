@@ -11,6 +11,14 @@ import (
 )
 
 func runPlotlineJSONQuery(ctx context.Context, agent *adk.ChatModelAgent, query, stage string) (string, error) {
+	return runJSONQuery(ctx, agent, query, stage, contracts.NormalizePlotlinePayload)
+}
+
+func runPlotlineReviewJSONQuery(ctx context.Context, agent *adk.ChatModelAgent, query, stage string) (string, error) {
+	return runJSONQuery(ctx, agent, query, stage, contracts.NormalizePlotlineReviewPayload)
+}
+
+func runJSONQuery[T any](ctx context.Context, agent *adk.ChatModelAgent, query, stage string, normalize func(string) (string, *T, error)) (string, error) {
 	runner := adk.NewRunner(ctx, adk.RunnerConfig{
 		EnableStreaming: true,
 		Agent:           agent,
@@ -24,7 +32,7 @@ func runPlotlineJSONQuery(ctx context.Context, agent *adk.ChatModelAgent, query,
 			break
 		}
 		if event.Err != nil {
-			return "", fmt.Errorf("%s 失败: %w", stage, event.Err)
+			return "", fmt.Errorf("%s failed: %w", stage, event.Err)
 		}
 		if event.Output == nil {
 			continue
@@ -40,12 +48,12 @@ func runPlotlineJSONQuery(ctx context.Context, agent *adk.ChatModelAgent, query,
 
 	result := builder.String()
 	if strings.TrimSpace(result) == "" {
-		return "", fmt.Errorf("%s 失败: 未生成任何内容", stage)
+		return "", fmt.Errorf("%s failed: empty response", stage)
 	}
 
-	normalized, _, err := contracts.NormalizePlotlinePayload(result)
+	normalized, _, err := normalize(result)
 	if err != nil {
-		return "", fmt.Errorf("%s 输出格式无效: %w", stage, err)
+		return "", fmt.Errorf("%s returned invalid JSON: %w", stage, err)
 	}
 	return normalized, nil
 }

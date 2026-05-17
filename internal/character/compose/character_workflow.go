@@ -25,11 +25,11 @@ type CharacterWorkflowState struct {
 	Genre               string
 	Outline             string
 	UserSuggestion      string
-	ExistingCharacters  string
-	ExtractedCharacters string
-	PolishedCharacters  string
-	ReviewedCharacters  string
-	RevisedCharacters   string
+	ExistingCharacters  map[string]any
+	ExtractedCharacters map[string]any
+	PolishedCharacters  map[string]any
+	ReviewedCharacters  map[string]any
+	RevisedCharacters   map[string]any
 	SavedCharacterIDs   []uint
 	ErrorMsg            string
 	RetryCount          int
@@ -101,7 +101,7 @@ func ExecuteCharacterWorkflow(
 		return nil, fmt.Errorf("工作流输入不能为空")
 	}
 	if input.NovelID == 0 {
-		return nil, fmt.Errorf("小说ID不能为空")
+		return nil, fmt.Errorf("小说 ID 不能为空")
 	}
 	return graph.Invoke(ctx, input)
 }
