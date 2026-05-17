@@ -180,6 +180,10 @@ func TestOutlineWorkflowGraph_FullGeneration(t *testing.T) {
 	require.Empty(t, mock.lastReviewSuggestion)
 	require.Equal(t, mock.lastReviewOutline, mock.lastReviseOutline)
 	require.NotEmpty(t, result.ReviewSuggestions)
+	require.NotEmpty(t, result.GeneratedOutline)
+	require.NotEmpty(t, result.ExpandedOutline)
+	require.NotEmpty(t, result.PolishedOutline)
+	require.NotEmpty(t, result.RevisedOutline)
 	require.NotZero(t, result.NovelID)
 
 	saved, err := repo.GetByID(result.NovelID)

@@ -77,11 +77,11 @@ func logStateNodeInput(ctx context.Context, node string, state *OutlineWorkflowS
 		"genre", trimForLog(state.Genre),
 		"original_outline", shortPreview(state.OriginalOutline),
 		"user_suggestion", shortPreview(state.UserSuggestion),
-		"generated_chars", len([]rune(state.GeneratedOutline)),
-		"expanded_chars", len([]rune(state.ExpandedOutline)),
-		"polished_chars", len([]rune(state.PolishedOutline)),
+		"generated_chars", previewMapChars(state.GeneratedOutline),
+		"expanded_chars", previewMapChars(state.ExpandedOutline),
+		"polished_chars", previewMapChars(state.PolishedOutline),
 		"review_chars", len([]rune(state.ReviewSuggestions)),
-		"revised_chars", len([]rune(state.RevisedOutline)),
+		"revised_chars", previewMapChars(state.RevisedOutline),
 		"retry_count", state.RetryCount,
 	)
 }
@@ -101,11 +101,11 @@ func logNodeOutput(ctx context.Context, node string, state *OutlineWorkflowState
 		"novel_title", trimForLog(state.NovelTitle),
 		"synopsis", shortPreview(state.Synopsis),
 		"outline", shortPreview(state.Outline),
-		"generated_chars", len([]rune(state.GeneratedOutline)),
-		"expanded_chars", len([]rune(state.ExpandedOutline)),
-		"polished_chars", len([]rune(state.PolishedOutline)),
+		"generated_chars", previewMapChars(state.GeneratedOutline),
+		"expanded_chars", previewMapChars(state.ExpandedOutline),
+		"polished_chars", previewMapChars(state.PolishedOutline),
 		"review_chars", len([]rune(state.ReviewSuggestions)),
-		"revised_chars", len([]rune(state.RevisedOutline)),
+		"revised_chars", previewMapChars(state.RevisedOutline),
 		"retry_count", state.RetryCount,
 		"error_msg", trimForLog(state.ErrorMsg),
 	)
@@ -144,4 +144,16 @@ func summarizeText(text string) string {
 
 func trimForLog(text string) string {
 	return summarizeText(text)
+}
+
+func previewMapChars(value map[string]any) int {
+	if len(value) == 0 {
+		return 0
+	}
+
+	raw, err := marshalNovelJSONMap(value)
+	if err != nil {
+		return 0
+	}
+	return len([]rune(raw))
 }

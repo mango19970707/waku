@@ -77,7 +77,7 @@ func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(c
 			logNodeOutput(ctx, "generate", result, err)
 		}()
 
-		if state.GeneratedOutline != "" {
+		if !novelJSONMapEmpty(state.GeneratedOutline) {
 			state.CurrentNode = "generate_success"
 			return state, nil
 		}
@@ -95,7 +95,7 @@ func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(c
 				state.ErrorMsg = fmt.Sprintf("解析生成阶段数据失败: %v", err)
 				return state, nil
 			}
-			state.GeneratedOutline = normalized
+			state.GeneratedOutline = mustParseNovelJSONMap(normalized)
 			applyPayloadToState(state, payload)
 			state.CurrentNode = "generate_success"
 			state.RetryCount = 0
@@ -115,7 +115,7 @@ func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(c
 			return state, nil
 		}
 
-		state.GeneratedOutline = normalized
+		state.GeneratedOutline = mustParseNovelJSONMap(normalized)
 		applyPayloadToState(state, payload)
 		if err := saveStageFile(state.Author, state.NovelName, constant.StageGenerate, normalized); err != nil {
 			state.CurrentNode = "generate_failed"
@@ -137,7 +137,7 @@ func expandNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			logNodeOutput(ctx, "expand", result, err)
 		}()
 
-		if state.ExpandedOutline != "" {
+		if !novelJSONMapEmpty(state.ExpandedOutline) {
 			state.CurrentNode = "expand_success"
 			return state, nil
 		}
@@ -155,13 +155,20 @@ func expandNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 				state.ErrorMsg = fmt.Sprintf("解析扩写阶段数据失败: %v", err)
 				return state, nil
 			}
-			state.ExpandedOutline = normalized
+			state.ExpandedOutline = mustParseNovelJSONMap(normalized)
 			applyPayloadToState(state, payload)
 			state.CurrentNode = "expand_success"
 			state.RetryCount = 0
 			return state, nil
 		}
-		expanded, err := agentExecutor.ExpandOutline(ctx, chatModel, state.GeneratedOutline, state.Genre)
+		generatedOutline, err := marshalNovelJSONMap(state.GeneratedOutline)
+		if err != nil {
+			state.CurrentNode = "expand_failed"
+			state.ErrorMsg = fmt.Sprintf("搴忓垪鍖栫敓鎴愬ぇ绾插け璐? %v", err)
+			return state, nil
+		}
+
+		expanded, err := agentExecutor.ExpandOutline(ctx, chatModel, generatedOutline, state.Genre)
 		if err != nil {
 			state.CurrentNode = "expand_failed"
 			state.ErrorMsg = fmt.Sprintf("扩写大纲失败: %v", err)
@@ -175,7 +182,7 @@ func expandNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			return state, nil
 		}
 
-		state.ExpandedOutline = normalized
+		state.ExpandedOutline = mustParseNovelJSONMap(normalized)
 		applyPayloadToState(state, payload)
 		if err := saveStageFile(state.Author, state.NovelName, constant.StageExpand, normalized); err != nil {
 			state.CurrentNode = "expand_failed"
@@ -197,7 +204,7 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			logNodeOutput(ctx, "polish", result, err)
 		}()
 
-		if state.PolishedOutline != "" {
+		if !novelJSONMapEmpty(state.PolishedOutline) {
 			state.CurrentNode = "polish_success"
 			return state, nil
 		}
@@ -215,7 +222,7 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 				state.ErrorMsg = fmt.Sprintf("解析润色阶段数据失败: %v", err)
 				return state, nil
 			}
-			state.PolishedOutline = normalized
+			state.PolishedOutline = mustParseNovelJSONMap(normalized)
 			applyPayloadToState(state, payload)
 			state.CurrentNode = "polish_success"
 			state.RetryCount = 0
@@ -223,11 +230,21 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 		}
 		// 在 quick revision 链路中，polish 节点承担“按用户建议预修改 + 润色”的职责。
 		source := state.ExpandedOutline
-		if source == "" {
-			source = state.OriginalOutline
+		if novelJSONMapEmpty(source) {
+			source = state.GeneratedOutline
+		}
+		if novelJSONMapEmpty(source) {
+			source = mustParseNovelJSONMap(state.OriginalOutline)
 		}
 
-		polished, err := agentExecutor.PolishOutline(ctx, chatModel, source, state.UserSuggestion, state.Genre)
+		sourceJSON, err := marshalNovelJSONMap(source)
+		if err != nil {
+			state.CurrentNode = "polish_failed"
+			state.ErrorMsg = fmt.Sprintf("搴忓垪鍖栧緟娑﹁壊澶х翰澶辫触: %v", err)
+			return state, nil
+		}
+
+		polished, err := agentExecutor.PolishOutline(ctx, chatModel, sourceJSON, state.UserSuggestion, state.Genre)
 		if err != nil {
 			state.CurrentNode = "polish_failed"
 			state.ErrorMsg = fmt.Sprintf("润色大纲失败: %v", err)
@@ -241,7 +258,7 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			return state, nil
 		}
 
-		state.PolishedOutline = normalized
+		state.PolishedOutline = mustParseNovelJSONMap(normalized)
 		applyPayloadToState(state, payload)
 		if err := saveStageFile(state.Author, state.NovelName, constant.StagePolish, normalized); err != nil {
 			state.CurrentNode = "polish_failed"
@@ -271,14 +288,14 @@ func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 		content, err := loadStageFile(state.Author, state.NovelName, constant.StageReview)
 		if err != nil {
 			state.CurrentNode = "review_failed"
-			state.ErrorMsg = fmt.Sprintf("加载审核阶段文件失败: %v", err)
+			state.ErrorMsg = fmt.Sprintf("??????????: %v", err)
 			return state, nil
 		}
 		if content != "" {
 			normalized, err := normalizeReviewSuggestions(content)
 			if err != nil {
 				state.CurrentNode = "review_failed"
-				state.ErrorMsg = fmt.Sprintf("解析审核阶段数据失败: %v", err)
+				state.ErrorMsg = fmt.Sprintf("??????????: %v", err)
 				return state, nil
 			}
 			state.ReviewSuggestions = normalized
@@ -287,24 +304,31 @@ func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			return state, nil
 		}
 
-		reviewed, err := agentExecutor.ReviewOutline(ctx, chatModel, latestOutlineForRevision(state), state.UserSuggestion, state.Genre)
+		latestOutline, err := latestOutlineForRevision(state)
 		if err != nil {
 			state.CurrentNode = "review_failed"
-			state.ErrorMsg = fmt.Sprintf("审核大纲失败: %v", err)
+			state.ErrorMsg = fmt.Sprintf("serialize outline for review failed: %v", err)
+			return state, nil
+		}
+
+		reviewed, err := agentExecutor.ReviewOutline(ctx, chatModel, latestOutline, state.UserSuggestion, state.Genre)
+		if err != nil {
+			state.CurrentNode = "review_failed"
+			state.ErrorMsg = fmt.Sprintf("??????: %v", err)
 			return state, nil
 		}
 
 		normalized, err := normalizeReviewSuggestions(reviewed)
 		if err != nil {
 			state.CurrentNode = "review_failed"
-			state.ErrorMsg = fmt.Sprintf("审核阶段输出格式无效: %v", err)
+			state.ErrorMsg = fmt.Sprintf("??????????: %v", err)
 			return state, nil
 		}
 
 		state.ReviewSuggestions = normalized
 		if err := saveStageFile(state.Author, state.NovelName, constant.StageReview, normalized); err != nil {
 			state.CurrentNode = "review_failed"
-			state.ErrorMsg = fmt.Sprintf("保存审核阶段文件失败: %v", err)
+			state.ErrorMsg = fmt.Sprintf("??????????: %v", err)
 			return state, nil
 		}
 
@@ -322,7 +346,7 @@ func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			logNodeOutput(ctx, "revise", result, err)
 		}()
 
-		if state.RevisedOutline != "" {
+		if !novelJSONMapEmpty(state.RevisedOutline) {
 			state.CurrentNode = "revise_success"
 			return state, nil
 		}
@@ -330,24 +354,29 @@ func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 		content, err := loadStageFile(state.Author, state.NovelName, constant.StageRevise)
 		if err != nil {
 			state.CurrentNode = "revise_failed"
-			state.ErrorMsg = fmt.Sprintf("???????????????: %v", err)
+			state.ErrorMsg = fmt.Sprintf("load revise stage file failed: %v", err)
 			return state, nil
 		}
 		if content != "" {
 			normalized, payload, err := normalizeStageOutput(content, state.Genre, state.NovelName, state.Synopsis)
 			if err != nil {
 				state.CurrentNode = "revise_failed"
-				state.ErrorMsg = fmt.Sprintf("???????????????: %v", err)
+				state.ErrorMsg = fmt.Sprintf("parse revise stage data failed: %v", err)
 				return state, nil
 			}
-			state.RevisedOutline = normalized
+			state.RevisedOutline = mustParseNovelJSONMap(normalized)
 			applyPayloadToState(state, payload)
 			state.CurrentNode = "revise_success"
 			state.RetryCount = 0
 			return state, nil
 		}
 
-		source := latestOutlineForRevision(state)
+		source, err := latestOutlineForRevision(state)
+		if err != nil {
+			state.CurrentNode = "revise_failed"
+			state.ErrorMsg = fmt.Sprintf("serialize latest outline failed: %v", err)
+			return state, nil
+		}
 		if source == "" {
 			state.CurrentNode = "revise_failed"
 			state.ErrorMsg = "latest outline is empty"
@@ -367,22 +396,22 @@ func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 		revised, err := agentExecutor.ReviseOutline(ctx, chatModel, source, suggestions, state.Genre)
 		if err != nil {
 			state.CurrentNode = "revise_failed"
-			state.ErrorMsg = fmt.Sprintf("?????????: %v", err)
+			state.ErrorMsg = fmt.Sprintf("revise outline failed: %v", err)
 			return state, nil
 		}
 
 		normalized, payload, err := contracts.NormalizeNovelPayload(revised, state.Genre)
 		if err != nil {
 			state.CurrentNode = "revise_failed"
-			state.ErrorMsg = fmt.Sprintf("???????????????: %v", err)
+			state.ErrorMsg = fmt.Sprintf("revise stage output invalid: %v", err)
 			return state, nil
 		}
 
-		state.RevisedOutline = normalized
+		state.RevisedOutline = mustParseNovelJSONMap(normalized)
 		applyPayloadToState(state, payload)
 		if err := saveStageFile(state.Author, state.NovelName, constant.StageRevise, normalized); err != nil {
 			state.CurrentNode = "revise_failed"
-			state.ErrorMsg = fmt.Sprintf("???????????????: %v", err)
+			state.ErrorMsg = fmt.Sprintf("save revise stage file failed: %v", err)
 			return state, nil
 		}
 
@@ -405,31 +434,38 @@ func saveToDBNode(repo repository.Repository) func(context.Context, *OutlineWork
 			return state, nil
 		}
 
-		if state.RevisedOutline == "" {
+		if novelJSONMapEmpty(state.RevisedOutline) {
 			state.CurrentNode = "save_failed"
-			state.ErrorMsg = "修改后的大纲为空，无法保存"
+			state.ErrorMsg = "revised outline is empty"
 			return state, nil
 		}
 		if state.Author == "" {
 			state.CurrentNode = "save_failed"
-			state.ErrorMsg = "作者名称为空，无法保存"
+			state.ErrorMsg = "author is empty"
 			return state, nil
 		}
 
-		normalized, payload, err := contracts.NormalizeNovelPayload(state.RevisedOutline, state.Genre)
+		revisedOutlineJSON, err := marshalNovelJSONMap(state.RevisedOutline)
 		if err != nil {
 			state.CurrentNode = "save_failed"
-			state.ErrorMsg = fmt.Sprintf("最终大纲格式无效: %v", err)
+			state.ErrorMsg = fmt.Sprintf("serialize revised outline failed: %v", err)
 			return state, nil
 		}
-		state.RevisedOutline = normalized
+
+		normalized, payload, err := contracts.NormalizeNovelPayload(revisedOutlineJSON, state.Genre)
+		if err != nil {
+			state.CurrentNode = "save_failed"
+			state.ErrorMsg = fmt.Sprintf("final outline invalid: %v", err)
+			return state, nil
+		}
+		state.RevisedOutline = mustParseNovelJSONMap(normalized)
 		applyPayloadToState(state, payload)
 
 		if state.NovelID > 0 {
 			novel, err := repo.GetByID(state.NovelID)
 			if err != nil {
 				state.CurrentNode = "save_failed"
-				state.ErrorMsg = fmt.Sprintf("查询小说失败: %v", err)
+				state.ErrorMsg = fmt.Sprintf("query novel failed: %v", err)
 				return state, nil
 			}
 
@@ -441,7 +477,7 @@ func saveToDBNode(repo repository.Repository) func(context.Context, *OutlineWork
 
 			if err := repo.Update(novel); err != nil {
 				state.CurrentNode = "save_failed"
-				state.ErrorMsg = fmt.Sprintf("更新小说失败: %v", err)
+				state.ErrorMsg = fmt.Sprintf("update novel failed: %v", err)
 				return state, nil
 			}
 
@@ -454,12 +490,12 @@ func saveToDBNode(repo repository.Repository) func(context.Context, *OutlineWork
 		duplicated, err := repo.CheckDuplicateByAuthorAndTitle(state.Author, payload.Title)
 		if err != nil {
 			state.CurrentNode = "save_failed"
-			state.ErrorMsg = fmt.Sprintf("检查重名失败: %v", err)
+			state.ErrorMsg = fmt.Sprintf("check duplicate failed: %v", err)
 			return state, nil
 		}
 		if duplicated {
 			state.CurrentNode = "save_failed"
-			state.ErrorMsg = fmt.Sprintf("作者 %s 已存在同名小说《%s》", state.Author, payload.Title)
+			state.ErrorMsg = fmt.Sprintf("duplicate novel exists for author %s and title %s", state.Author, payload.Title)
 			return state, nil
 		}
 
@@ -473,7 +509,7 @@ func saveToDBNode(repo repository.Repository) func(context.Context, *OutlineWork
 		}
 		if err := repo.Create(novel); err != nil {
 			state.CurrentNode = "save_failed"
-			state.ErrorMsg = fmt.Sprintf("创建小说失败: %v", err)
+			state.ErrorMsg = fmt.Sprintf("create novel failed: %v", err)
 			return state, nil
 		}
 
@@ -540,6 +576,35 @@ func mustParseOutlineMap(raw string) map[string]any {
 	var outlineMap map[string]any
 	_ = json.Unmarshal([]byte(raw), &outlineMap)
 	return outlineMap
+}
+
+func parseNovelJSONMap(raw string) (map[string]any, error) {
+	var result map[string]any
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return nil, fmt.Errorf("parse novel json map: %w", err)
+	}
+	return result, nil
+}
+
+func mustParseNovelJSONMap(raw string) map[string]any {
+	result, _ := parseNovelJSONMap(raw)
+	return result
+}
+
+func marshalNovelJSONMap(value map[string]any) (string, error) {
+	if len(value) == 0 {
+		return "", nil
+	}
+
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("marshal novel json map: %w", err)
+	}
+	return string(data), nil
+}
+
+func novelJSONMapEmpty(value map[string]any) bool {
+	return len(value) == 0
 }
 
 func extractLegacyOutlineContent(raw string) string {
@@ -640,16 +705,16 @@ func marshalNormalizedJSON(value any) (string, error) {
 	return string(data), nil
 }
 
-func latestOutlineForRevision(state *OutlineWorkflowState) string {
+func latestOutlineForRevision(state *OutlineWorkflowState) (string, error) {
 	switch {
-	case strings.TrimSpace(state.PolishedOutline) != "":
-		return state.PolishedOutline
-	case strings.TrimSpace(state.ExpandedOutline) != "":
-		return state.ExpandedOutline
-	case strings.TrimSpace(state.GeneratedOutline) != "":
-		return state.GeneratedOutline
+	case !novelJSONMapEmpty(state.PolishedOutline):
+		return marshalNovelJSONMap(state.PolishedOutline)
+	case !novelJSONMapEmpty(state.ExpandedOutline):
+		return marshalNovelJSONMap(state.ExpandedOutline)
+	case !novelJSONMapEmpty(state.GeneratedOutline):
+		return marshalNovelJSONMap(state.GeneratedOutline)
 	default:
-		return strings.TrimSpace(state.OriginalOutline)
+		return strings.TrimSpace(state.OriginalOutline), nil
 	}
 }
 

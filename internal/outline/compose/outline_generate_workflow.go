@@ -18,11 +18,11 @@ type OutlineWorkflowState struct {
 	Genre             string
 	OriginalOutline   string
 	UserSuggestion    string
-	GeneratedOutline  string
-	ExpandedOutline   string
-	PolishedOutline   string
+	GeneratedOutline  map[string]any
+	ExpandedOutline   map[string]any
+	PolishedOutline   map[string]any
 	ReviewSuggestions string
-	RevisedOutline    string
+	RevisedOutline    map[string]any
 	NovelTitle        string
 	Synopsis          string
 	Outline           string
