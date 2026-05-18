@@ -6,6 +6,7 @@ import (
 	"testing"
 	"waku/internal/character/repository"
 	"waku/internal/model"
+	plotlineRepo "waku/internal/plotline/repository"
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"gorm.io/driver/sqlite"
@@ -21,20 +22,20 @@ type stubAgentExecutor struct {
 	extractCalls int
 }
 
-func (s *stubAgentExecutor) ExtractCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, existingCharacters string) (string, error) {
+func (s *stubAgentExecutor) ExtractCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, plotlines, existingCharacters string) (string, error) {
 	s.extractCalls++
 	return s.extract, nil
 }
 
-func (s *stubAgentExecutor) PolishCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters, userSuggestion string) (string, error) {
+func (s *stubAgentExecutor) PolishCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, plotlines, characters, userSuggestion string) (string, error) {
 	return s.polish, nil
 }
 
-func (s *stubAgentExecutor) ReviewCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters string) (string, error) {
+func (s *stubAgentExecutor) ReviewCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, plotlines, characters string) (string, error) {
 	return s.review, nil
 }
 
-func (s *stubAgentExecutor) ReviseCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, characters, reviewSuggestions string) (string, error) {
+func (s *stubAgentExecutor) ReviseCharacters(ctx context.Context, chatModel einoModel.BaseChatModel, outline, genre, plotlines, characters, reviewSuggestions string) (string, error) {
 	return s.revise, nil
 }
 
@@ -64,7 +65,8 @@ func TestCharacterWorkflow_FullGeneration(t *testing.T) {
 	}
 	RegisterAgentExecutor(executor)
 
-	graph, err := NewCharacterWorkflow(ctx, nil, novelRepo, characterRepo)
+	plotlineRepository := plotlineRepo.NewPlotlineRepository(db)
+	graph, err := NewCharacterWorkflow(ctx, nil, novelRepo, characterRepo, plotlineRepository)
 	if err != nil {
 		t.Fatalf("NewCharacterWorkflow() error = %v", err)
 	}
@@ -73,6 +75,8 @@ func TestCharacterWorkflow_FullGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteCharacterWorkflow() error = %v", err)
 	}
+
+	t.Logf("Final state: CurrentNode=%s, ExtractCalls=%d, ErrorMsg=%s", result.CurrentNode, executor.extractCalls, result.ErrorMsg)
 
 	if result.CurrentNode != "save_success" {
 		t.Fatalf("expected save_success, got %s", result.CurrentNode)
@@ -126,7 +130,8 @@ func TestCharacterWorkflow_QuickRevisionWithNovelSuggestion(t *testing.T) {
 	}
 	RegisterAgentExecutor(executor)
 
-	graph, err := NewCharacterWorkflow(ctx, nil, novelRepo, characterRepo)
+	plotlineRepository := plotlineRepo.NewPlotlineRepository(db)
+	graph, err := NewCharacterWorkflow(ctx, nil, novelRepo, characterRepo, plotlineRepository)
 	if err != nil {
 		t.Fatalf("NewCharacterWorkflow() error = %v", err)
 	}

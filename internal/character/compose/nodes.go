@@ -12,6 +12,7 @@ import (
 	"waku/internal/character/repository"
 	"waku/internal/constant"
 	"waku/internal/model"
+	plotlineRepo "waku/internal/plotline/repository"
 
 	einoModel "github.com/cloudwego/eino/components/model"
 )
@@ -22,9 +23,14 @@ type characterFilePayload struct {
 	FileType string `json:"file_type"`
 }
 
-func initNode(novelRepo repository.Repository, characterRepo repository.CharacterRepository) func(context.Context, *CharacterWorkflowInput) (*CharacterWorkflowState, error) {
-	return func(ctx context.Context, input *CharacterWorkflowInput) (*CharacterWorkflowState, error) {
-		state := newWorkflowState(input)
+func initNode(novelRepo repository.Repository, characterRepo repository.CharacterRepository, plotlineRepository plotlineRepo.PlotlineRepository) func(context.Context, *CharacterWorkflowInput) (*CharacterWorkflowState, error) {
+	return func(ctx context.Context, input *CharacterWorkflowInput) (state *CharacterWorkflowState, err error) {
+		logInitNodeInput(ctx, input)
+		defer func() {
+			logNodeOutput(ctx, "init", state, err)
+		}()
+
+		state = newWorkflowState(input)
 
 		novel, err := novelRepo.GetByID(input.NovelID)
 		if err != nil {
@@ -35,6 +41,13 @@ func initNode(novelRepo repository.Repository, characterRepo repository.Characte
 		state.Author = novel.Author
 		state.Genre = novel.Genre
 		state.Outline = extractOutlineContent(novel.Outline)
+
+		// 加载剧情线数据
+		plotlines, err := loadPlotlinesFromDB(plotlineRepository, novel.ID)
+		if err != nil {
+			return nil, err
+		}
+		state.Plotlines = plotlines
 
 		existingCharacters, err := loadCharactersFromDB(characterRepo, novel.ID)
 		if err != nil {
@@ -57,7 +70,13 @@ func initNode(novelRepo repository.Repository, characterRepo repository.Characte
 }
 
 func extractNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
-	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+	return func(ctx context.Context, state *CharacterWorkflowState) (result *CharacterWorkflowState, err error) {
+		logStateNodeInput(ctx, "extract", state)
+		result = state
+		defer func() {
+			logNodeOutput(ctx, "extract", result, err)
+		}()
+
 		if !isEmptyPayload(state.ExtractedCharacters) {
 			state.CurrentNode = "extract_success"
 			return state, nil
@@ -89,7 +108,7 @@ func extractNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(co
 			return state, nil
 		}
 
-		extracted, err := agentExecutor.ExtractCharacters(ctx, chatModel, state.Outline, state.Genre, existingJSON)
+		extracted, err := agentExecutor.ExtractCharacters(ctx, chatModel, state.Outline, state.Genre, state.Plotlines, existingJSON)
 		if err != nil {
 			state.CurrentNode = "extract_failed"
 			state.ErrorMsg = err.Error()
@@ -117,7 +136,13 @@ func extractNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(co
 }
 
 func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
-	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+	return func(ctx context.Context, state *CharacterWorkflowState) (result *CharacterWorkflowState, err error) {
+		logStateNodeInput(ctx, "polish", state)
+		result = state
+		defer func() {
+			logNodeOutput(ctx, "polish", result, err)
+		}()
+
 		if !isEmptyPayload(state.PolishedCharacters) {
 			state.CurrentNode = "polish_success"
 			return state, nil
@@ -159,7 +184,7 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			return state, nil
 		}
 
-		polished, err := agentExecutor.PolishCharacters(ctx, chatModel, state.Outline, state.Genre, sourceJSON, state.UserSuggestion)
+		polished, err := agentExecutor.PolishCharacters(ctx, chatModel, state.Outline, state.Genre, state.Plotlines, sourceJSON, state.UserSuggestion)
 		if err != nil {
 			state.CurrentNode = "polish_failed"
 			state.ErrorMsg = err.Error()
@@ -187,7 +212,13 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 }
 
 func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
-	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+	return func(ctx context.Context, state *CharacterWorkflowState) (result *CharacterWorkflowState, err error) {
+		logStateNodeInput(ctx, "review", state)
+		result = state
+		defer func() {
+			logNodeOutput(ctx, "review", result, err)
+		}()
+
 		if !isEmptyPayload(state.ReviewedCharacters) {
 			state.CurrentNode = "review_success"
 			return state, nil
@@ -225,7 +256,7 @@ func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			return state, nil
 		}
 
-		reviewed, err := agentExecutor.ReviewCharacters(ctx, chatModel, state.Outline, state.Genre, polishedJSON)
+		reviewed, err := agentExecutor.ReviewCharacters(ctx, chatModel, state.Outline, state.Genre, state.Plotlines, polishedJSON)
 		if err != nil {
 			state.CurrentNode = "review_failed"
 			state.ErrorMsg = err.Error()
@@ -253,7 +284,13 @@ func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 }
 
 func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
-	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+	return func(ctx context.Context, state *CharacterWorkflowState) (result *CharacterWorkflowState, err error) {
+		logStateNodeInput(ctx, "revise", state)
+		result = state
+		defer func() {
+			logNodeOutput(ctx, "revise", result, err)
+		}()
+
 		if !isEmptyPayload(state.RevisedCharacters) {
 			state.CurrentNode = "revise_success"
 			return state, nil
@@ -302,7 +339,7 @@ func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			return state, nil
 		}
 
-		revised, err := agentExecutor.ReviseCharacters(ctx, chatModel, state.Outline, state.Genre, polishedJSON, reviewJSON)
+		revised, err := agentExecutor.ReviseCharacters(ctx, chatModel, state.Outline, state.Genre, state.Plotlines, polishedJSON, reviewJSON)
 		if err != nil {
 			state.CurrentNode = "revise_failed"
 			state.ErrorMsg = err.Error()
@@ -467,6 +504,42 @@ func loadCharactersFromDB(characterRepo repository.CharacterRepository, novelID 
 	return parseCharacterPayloadMap(payload)
 }
 
+func loadPlotlinesFromDB(plotlineRepository plotlineRepo.PlotlineRepository, novelID uint) (string, error) {
+	plotlines, err := plotlineRepository.GetByNovelID(novelID)
+	if err != nil {
+		return "", fmt.Errorf("加载剧情线失败: %w", err)
+	}
+	if len(plotlines) == 0 {
+		return "", nil
+	}
+
+	// 构造剧情线 JSON 数据
+	type PlotlineItem struct {
+		ID          uint   `json:"id"`
+		Title       string `json:"title"`
+		Type        string `json:"type"`
+		Description string `json:"description"`
+		Status      string `json:"status"`
+	}
+
+	items := make([]PlotlineItem, 0, len(plotlines))
+	for _, plotline := range plotlines {
+		items = append(items, PlotlineItem{
+			ID:          plotline.ID,
+			Title:       plotline.Title,
+			Type:        plotline.Type,
+			Description: plotline.Description,
+			Status:      plotline.Status,
+		})
+	}
+
+	data, err := json.Marshal(map[string]any{"plotlines": items})
+	if err != nil {
+		return "", fmt.Errorf("序列化剧情线 JSON 失败: %w", err)
+	}
+	return string(data), nil
+}
+
 func extractOutlineContent(raw string) string {
 	if strings.TrimSpace(raw) == "" {
 		return ""
@@ -584,7 +657,13 @@ func unmarshalPayloadMap(raw string) (map[string]any, error) {
 
 // preSaveNode 预保存节点：批量插入角色（relationships为空），获取真实ID，建立映射表
 func preSaveNode(characterRepo repository.CharacterRepository) func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
-	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+	return func(ctx context.Context, state *CharacterWorkflowState) (result *CharacterWorkflowState, err error) {
+		logStateNodeInput(ctx, "preSave", state)
+		result = state
+		defer func() {
+			logNodeOutput(ctx, "preSave", result, err)
+		}()
+
 		if len(state.IDMapping) > 0 {
 			state.CurrentNode = "preSave_success"
 			return state, nil
@@ -735,7 +814,13 @@ func preSaveNode(characterRepo repository.CharacterRepository) func(context.Cont
 
 		state.IDMapping = idMapping
 		state.SavedCharacterIDs = savedIDs
-		state.CurrentNode = "preSave_success"
+
+		// 如果没有ID映射（全新生成场景），直接标记为最终成功
+		if len(idMapping) == 0 {
+			state.CurrentNode = "save_success"
+		} else {
+			state.CurrentNode = "preSave_success"
+		}
 		state.RetryCount = 0
 		return state, nil
 	}
@@ -743,7 +828,13 @@ func preSaveNode(characterRepo repository.CharacterRepository) func(context.Cont
 
 // mapIDsNode ID映射节点：将所有角色的relationships中的临时ID转换为真实ID
 func mapIDsNode() func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
-	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+	return func(ctx context.Context, state *CharacterWorkflowState) (result *CharacterWorkflowState, err error) {
+		logStateNodeInput(ctx, "mapIDs", state)
+		result = state
+		defer func() {
+			logNodeOutput(ctx, "mapIDs", result, err)
+		}()
+
 		if !isEmptyPayload(state.MappedCharacters) {
 			state.CurrentNode = "mapIDs_success"
 			return state, nil
@@ -841,8 +932,20 @@ func mapIDsNode() func(context.Context, *CharacterWorkflowState) (*CharacterWork
 
 // updateRelationshipsNode 关系更新节点：批量更新数据库中的relationships字段
 func updateRelationshipsNode(characterRepo repository.CharacterRepository) func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
-	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
-		mappedJSON, err := marshalPayload(state.MappedCharacters)
+	return func(ctx context.Context, state *CharacterWorkflowState) (result *CharacterWorkflowState, err error) {
+		logStateNodeInput(ctx, "updateRelationships", state)
+		result = state
+		defer func() {
+			logNodeOutput(ctx, "updateRelationships", result, err)
+		}()
+
+		// 如果没有映射过的角色数据，使用修改后的角色数据
+		sourceData := state.MappedCharacters
+		if isEmptyPayload(sourceData) {
+			sourceData = state.RevisedCharacters
+		}
+
+		mappedJSON, err := marshalPayload(sourceData)
 		if err != nil {
 			state.CurrentNode = "updateRelationships_failed"
 			state.ErrorMsg = fmt.Sprintf("序列化映射后的角色失败: %v", err)

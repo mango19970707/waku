@@ -19,7 +19,7 @@ func NewCharacterReviewerAgent(ctx context.Context, chatModel model.BaseChatMode
 	})
 }
 
-func ReviewCharacters(ctx context.Context, agent *adk.ChatModelAgent, outline, genre, characters string) (string, error) {
-	query := fmt.Sprintf("请审核以下角色信息，并仅输出修改意见 JSON。\n\n小说类型：%s\n\n小说大纲：\n%s\n\n角色数据：\n%s\n\n请严格输出 review suggestions JSON。", genre, outline, characters)
-	return runCharacterJSONQuery(ctx, agent, query, "角色审核")
+func ReviewCharacters(ctx context.Context, agent *adk.ChatModelAgent, outline, genre, plotlines, characters string) (string, error) {
+	query := fmt.Sprintf("请审核以下角色信息，并仅输出修改意见 JSON。\n\n小说类型：%s\n\n小说大纲：\n%s\n\n剧情线：\n%s\n\n角色数据：\n%s\n\n请严格输出 review suggestions JSON。", genre, outline, plotlines, characters)
+	return runCharacterReviewJSONQuery(ctx, agent, query, "角色审核")
 }

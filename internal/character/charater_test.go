@@ -4,18 +4,19 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"waku/internal/character/compose"
+	"waku/internal/character/repository"
 	"waku/internal/config"
 	"waku/internal/model"
 	novelRepoository "waku/internal/outline/repository"
-	"waku/internal/character/compose"
-	//plotlineRepoository "waku/internal/plotline/repository"
-	"waku/internal/character/repository"
+	plotlineRepoository "waku/internal/plotline/repository"
 	"waku/internal/utils"
 
 	"github.com/kr/pretty"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	_ "modernc.org/sqlite"
 )
 
 var (
@@ -44,7 +45,7 @@ func init() {
 	sqlDB.SetMaxOpenConns(1)
 
 	if err = db.AutoMigrate(&model.Novel{},
-		&model.Plotline{}); err != nil {
+		&model.Plotline{}, &model.Character{}); err != nil {
 		panic(err)
 	}
 }
@@ -53,13 +54,14 @@ func TestCharaterWorkflowGraph_FullGeneration(t *testing.T) {
 	ctx := context.Background()
 	novelRepo := novelRepoository.NewRepository(db)
 	characterRepo := repository.NewCharacterRepository(db)
+	plotlineRepo := plotlineRepoository.NewPlotlineRepository(db)
 
 	chatModel, err := utils.NewChatModel(ctx, &cfg.Model)
 	if err != nil {
 		t.Fatal("new chatModel", err)
 	}
 
-	graph, err := compose.NewCharacterWorkflow(ctx, chatModel, novelRepo, characterRepo)
+	graph, err := compose.NewCharacterWorkflow(ctx, chatModel, novelRepo, characterRepo, plotlineRepo)
 	require.NoError(t, err)
 
 	input := &compose.CharacterWorkflowInput{
@@ -74,17 +76,20 @@ func TestCharaterWorkflowGraph_QuickRevision(t *testing.T) {
 	ctx := context.Background()
 	novelRepo := novelRepoository.NewRepository(db)
 	characterRepo := repository.NewCharacterRepository(db)
+	plotlineRepo := plotlineRepoository.NewPlotlineRepository(db)
 
 	chatModel, err := utils.NewChatModel(ctx, &cfg.Model)
 	if err != nil {
 		t.Fatal("new chatModel", err)
 	}
 
-	graph, err := compose.NewCharacterWorkflow(ctx, chatModel, novelRepo, characterRepo)
+	graph, err := compose.NewCharacterWorkflow(ctx, chatModel, novelRepo, characterRepo, plotlineRepo)
 	require.NoError(t, err)
 
 	input := &compose.CharacterWorkflowInput{
-		NovelID: 1,
+		NovelID:        1,
+		CharacterID:    1,
+		UserSuggestion: "年龄改为1000岁",
 	}
 
 	result, _ := compose.ExecuteCharacterWorkflow(ctx, graph, input)

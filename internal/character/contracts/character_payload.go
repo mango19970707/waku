@@ -112,7 +112,16 @@ func NormalizeCharacterReviewPayload(raw string) (string, *CharacterReviewPayloa
 		return "", nil, fmt.Errorf("解析 review suggestions JSON 失败: %w", err)
 	}
 	if payload.Suggestions == nil {
-		return "", nil, fmt.Errorf("suggestions 不能为空")
+		return "", nil, fmt.Errorf("suggestions 字段不能为空（应为数组，可以是空数组 []）")
+	}
+
+	// 允许空的 suggestions 数组（表示所有角色都合理，无需修改）
+	if len(payload.Suggestions) == 0 {
+		normalized, err := json.Marshal(&payload)
+		if err != nil {
+			return "", nil, fmt.Errorf("序列化 review suggestions JSON 失败: %w", err)
+		}
+		return string(normalized), &payload, nil
 	}
 
 	for i, item := range payload.Suggestions {

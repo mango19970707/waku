@@ -34,7 +34,18 @@ func routeAfterRevise(ctx context.Context, state *CharacterWorkflowState) (strin
 }
 
 func routeAfterPreSave(ctx context.Context, state *CharacterWorkflowState) (string, error) {
-	return routeWithRetry(state, "preSave_success", "mapIDs", "preSave")
+	if state.CurrentNode == "preSave_success" {
+		return "mapIDs", nil
+	}
+	if state.CurrentNode == "save_success" {
+		// 全新生成场景，已经完成所有保存工作
+		return compose.END, nil
+	}
+	if state.RetryCount >= state.MaxRetries {
+		return compose.END, fmt.Errorf("preSave 失败: %s", state.ErrorMsg)
+	}
+	state.RetryCount++
+	return "preSave", nil
 }
 
 func routeAfterMapIDs(ctx context.Context, state *CharacterWorkflowState) (string, error) {

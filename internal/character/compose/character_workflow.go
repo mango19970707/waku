@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"waku/internal/character/repository"
 	"waku/internal/constant"
+	plotlineRepo "waku/internal/plotline/repository"
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"
@@ -24,6 +25,7 @@ type CharacterWorkflowState struct {
 	Author              string
 	Genre               string
 	Outline             string
+	Plotlines           string // 所有剧情线的 JSON 格式数据
 	UserSuggestion      string
 	ExistingCharacters  map[string]any
 	ExtractedCharacters map[string]any
@@ -43,13 +45,14 @@ func BuildCharacterWorkflowGraph(
 	chatModel einoModel.BaseChatModel,
 	novelRepo repository.Repository,
 	characterRepo repository.CharacterRepository,
+	plotlineRepository plotlineRepo.PlotlineRepository,
 ) (compose.Runnable[*CharacterWorkflowInput, *CharacterWorkflowState], error) {
 	if err := ensureAgentExecutor(); err != nil {
 		return nil, err
 	}
 
 	graph := compose.NewGraph[*CharacterWorkflowInput, *CharacterWorkflowState]()
-	graph.AddLambdaNode("init", compose.InvokableLambda(initNode(novelRepo, characterRepo)))
+	graph.AddLambdaNode("init", compose.InvokableLambda(initNode(novelRepo, characterRepo, plotlineRepository)))
 	graph.AddLambdaNode("extract", compose.InvokableLambda(extractNode(ctx, chatModel)))
 	graph.AddLambdaNode("polish", compose.InvokableLambda(polishNode(ctx, chatModel)))
 	graph.AddLambdaNode("review", compose.InvokableLambda(reviewNode(ctx, chatModel)))
@@ -80,8 +83,9 @@ func BuildCharacterWorkflowGraph(
 		"preSave": true,
 	}))
 	graph.AddBranch("preSave", compose.NewGraphBranch(routeAfterPreSave, map[string]bool{
-		"preSave": true,
-		"mapIDs":  true,
+		"preSave":    true,
+		"mapIDs":     true,
+		compose.END:  true,
 	}))
 	graph.AddBranch("mapIDs", compose.NewGraphBranch(routeAfterMapIDs, map[string]bool{
 		"mapIDs":              true,
@@ -89,7 +93,7 @@ func BuildCharacterWorkflowGraph(
 	}))
 	graph.AddBranch("updateRelationships", compose.NewGraphBranch(routeAfterUpdateRelationships, map[string]bool{
 		"updateRelationships": true,
-		compose.END:            true,
+		compose.END:           true,
 	}))
 
 	return graph.Compile(ctx, compose.WithMaxRunSteps(50))
@@ -100,8 +104,9 @@ func NewCharacterWorkflow(
 	chatModel einoModel.BaseChatModel,
 	novelRepo repository.Repository,
 	characterRepo repository.CharacterRepository,
+	plotlineRepository plotlineRepo.PlotlineRepository,
 ) (compose.Runnable[*CharacterWorkflowInput, *CharacterWorkflowState], error) {
-	return BuildCharacterWorkflowGraph(ctx, chatModel, novelRepo, characterRepo)
+	return BuildCharacterWorkflowGraph(ctx, chatModel, novelRepo, characterRepo, plotlineRepository)
 }
 
 func ExecuteCharacterWorkflow(
@@ -109,13 +114,26 @@ func ExecuteCharacterWorkflow(
 	graph compose.Runnable[*CharacterWorkflowInput, *CharacterWorkflowState],
 	input *CharacterWorkflowInput,
 ) (*CharacterWorkflowState, error) {
+	logWorkflowInput(ctx, input)
+
+	var (
+		state *CharacterWorkflowState
+		err   error
+	)
+	defer func() {
+		logWorkflowOutput(ctx, state, err)
+	}()
+
 	if input == nil {
-		return nil, fmt.Errorf("工作流输入不能为空")
+		err = fmt.Errorf("工作流输入不能为空")
+		return nil, err
 	}
 	if input.NovelID == 0 {
-		return nil, fmt.Errorf("小说 ID 不能为空")
+		err = fmt.Errorf("小说 ID 不能为空")
+		return nil, err
 	}
-	return graph.Invoke(ctx, input)
+	state, err = graph.Invoke(ctx, input)
+	return state, err
 }
 
 func newWorkflowState(input *CharacterWorkflowInput) *CharacterWorkflowState {
