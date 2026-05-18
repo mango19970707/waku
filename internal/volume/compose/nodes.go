@@ -26,6 +26,11 @@ type volumeFilePayload struct {
 
 func initNode(novelRepo novelrepository.Repository, plotlineRepo plotlinerepository.PlotlineRepository, volumeRepo volumerepository.VolumeRepository) func(context.Context, *VolumeWorkflowInput) (*VolumeWorkflowState, error) {
 	return func(ctx context.Context, input *VolumeWorkflowInput) (state *VolumeWorkflowState, err error) {
+		logInitNodeInput(ctx, input)
+		defer func() {
+			logNodeOutput(ctx, "init", state, err)
+		}()
+
 		state = newWorkflowState(input)
 
 		novel, err := novelRepo.GetByID(input.NovelID)
@@ -71,7 +76,13 @@ func initNode(novelRepo novelrepository.Repository, plotlineRepo plotlinereposit
 }
 
 func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *VolumeWorkflowState) (*VolumeWorkflowState, error) {
-	return func(ctx context.Context, state *VolumeWorkflowState) (*VolumeWorkflowState, error) {
+	return func(ctx context.Context, state *VolumeWorkflowState) (result *VolumeWorkflowState, err error) {
+		logStateNodeInput(ctx, "generate", state)
+		result = state
+		defer func() {
+			logNodeOutput(ctx, "generate", result, err)
+		}()
+
 		if state.GeneratedVolumes != "" {
 			state.CurrentNode = "generate_success"
 			return state, nil
@@ -117,7 +128,13 @@ func generateNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(c
 }
 
 func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *VolumeWorkflowState) (*VolumeWorkflowState, error) {
-	return func(ctx context.Context, state *VolumeWorkflowState) (*VolumeWorkflowState, error) {
+	return func(ctx context.Context, state *VolumeWorkflowState) (result *VolumeWorkflowState, err error) {
+		logStateNodeInput(ctx, "polish", state)
+		result = state
+		defer func() {
+			logNodeOutput(ctx, "polish", result, err)
+		}()
+
 		if state.PolishedVolumes != "" {
 			state.CurrentNode = "polish_success"
 			return state, nil
@@ -173,7 +190,13 @@ func polishNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 }
 
 func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *VolumeWorkflowState) (*VolumeWorkflowState, error) {
-	return func(ctx context.Context, state *VolumeWorkflowState) (*VolumeWorkflowState, error) {
+	return func(ctx context.Context, state *VolumeWorkflowState) (result *VolumeWorkflowState, err error) {
+		logStateNodeInput(ctx, "review", state)
+		result = state
+		defer func() {
+			logNodeOutput(ctx, "review", result, err)
+		}()
+
 		if state.ReviewedVolumes != "" {
 			state.CurrentNode = "review_success"
 			return state, nil
@@ -186,13 +209,14 @@ func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 			return state, nil
 		}
 		if content != "" {
-			normalized, _, err := contracts.NormalizeVolumePayload(content)
+			// 验证审核结果格式（新格式：suggestions）
+			_, _, err := contracts.NormalizeVolumeReviewPayload(content)
 			if err != nil {
 				state.CurrentNode = "review_failed"
 				state.ErrorMsg = fmt.Sprintf("解析审核阶段数据失败: %v", err)
 				return state, nil
 			}
-			state.ReviewedVolumes = normalized
+			state.ReviewedVolumes = content
 			state.CurrentNode = "review_success"
 			state.RetryCount = 0
 			return state, nil
@@ -229,7 +253,13 @@ func reviewNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 }
 
 func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(context.Context, *VolumeWorkflowState) (*VolumeWorkflowState, error) {
-	return func(ctx context.Context, state *VolumeWorkflowState) (*VolumeWorkflowState, error) {
+	return func(ctx context.Context, state *VolumeWorkflowState) (result *VolumeWorkflowState, err error) {
+		logStateNodeInput(ctx, "revise", state)
+		result = state
+		defer func() {
+			logNodeOutput(ctx, "revise", result, err)
+		}()
+
 		if state.RevisedVolumes != "" {
 			state.CurrentNode = "revise_success"
 			return state, nil
@@ -285,7 +315,13 @@ func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 }
 
 func saveToDBNode(volumeRepo volumerepository.VolumeRepository) func(context.Context, *VolumeWorkflowState) (*VolumeWorkflowState, error) {
-	return func(ctx context.Context, state *VolumeWorkflowState) (*VolumeWorkflowState, error) {
+	return func(ctx context.Context, state *VolumeWorkflowState) (result *VolumeWorkflowState, err error) {
+		logStateNodeInput(ctx, "saveToDB", state)
+		result = state
+		defer func() {
+			logNodeOutput(ctx, "saveToDB", result, err)
+		}()
+
 		if len(state.SavedVolumeIDs) > 0 {
 			state.CurrentNode = "save_success"
 			return state, nil
@@ -327,28 +363,31 @@ func saveToDBNode(volumeRepo volumerepository.VolumeRepository) func(context.Con
 				return state, nil
 			}
 
+			// 如果 ID > 0，检查数据库中是否存在该 ID
 			if volumeModel.ID > 0 {
 				existingItem, ok := existingByID[volumeModel.ID]
 				if !ok {
-					state.CurrentNode = "save_failed"
-					state.ErrorMsg = fmt.Sprintf("分卷不存在: %d", volumeModel.ID)
-					return state, nil
+					// 数据库中不存在该 ID，清空 ID 按新增处理
+					// 这种情况通常发生在 AI Agent 新增时随便设置了一个 ID
+					volumeModel.ID = 0
+				} else {
+					// 数据库中存在该 ID，执行更新操作
+					existingItem.NovelID = state.NovelID
+					existingItem.VolumeNumber = volumeModel.VolumeNumber
+					existingItem.Title = volumeModel.Title
+					existingItem.Synopsis = volumeModel.Synopsis
+					existingItem.Theme = volumeModel.Theme
+					existingItem.Outline = volumeModel.Outline
+					existingItem.Status = volumeModel.Status
+					if err := volumeRepo.Update(existingItem); err != nil {
+						state.CurrentNode = "save_failed"
+						state.ErrorMsg = fmt.Sprintf("更新分卷失败: %v", err)
+						return state, nil
+					}
+					seen[existingItem.ID] = struct{}{}
+					savedIDs = append(savedIDs, existingItem.ID)
+					continue
 				}
-				existingItem.NovelID = state.NovelID
-				existingItem.VolumeNumber = volumeModel.VolumeNumber
-				existingItem.Title = volumeModel.Title
-				existingItem.Synopsis = volumeModel.Synopsis
-				existingItem.Theme = volumeModel.Theme
-				existingItem.Outline = volumeModel.Outline
-				existingItem.Status = volumeModel.Status
-				if err := volumeRepo.Update(existingItem); err != nil {
-					state.CurrentNode = "save_failed"
-					state.ErrorMsg = fmt.Sprintf("更新分卷失败: %v", err)
-					return state, nil
-				}
-				seen[existingItem.ID] = struct{}{}
-				savedIDs = append(savedIDs, existingItem.ID)
-				continue
 			}
 
 			if existingItem, ok := existingByNumber[volumeModel.VolumeNumber]; ok {

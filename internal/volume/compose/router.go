@@ -8,9 +8,15 @@ import (
 )
 
 func routeAfterInit(ctx context.Context, state *VolumeWorkflowState) (string, error) {
+	// 快速修改模式：只有小说ID和用户建议，直接跳到润色节点（用于新增卷）
+	if state.NovelID > 0 && state.UserSuggestion != "" && state.VolumeID == 0 {
+		return "polish", nil
+	}
+	// 修订模式：有小说ID、分卷ID和用户建议（用于修改已有卷）
 	if state.RevisionMode {
 		return "polish", nil
 	}
+	// 完整生成模式：有小说ID，从生成节点开始
 	if state.NovelID > 0 {
 		return "generate", nil
 	}

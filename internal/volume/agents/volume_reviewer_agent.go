@@ -41,7 +41,7 @@ func ReviewVolumes(ctx context.Context, agent *adk.ChatModelAgent, input *Volume
 		return "", fmt.Errorf("待审核分卷不能为空")
 	}
 
-	query := fmt.Sprintf(`请根据以下信息审核并修正分卷列表，并且只输出 JSON。
+	query := fmt.Sprintf(`请根据以下信息审核分卷列表，并输出修改建议 JSON。
 
 小说类型：
 %s
@@ -62,10 +62,10 @@ func ReviewVolumes(ctx context.Context, agent *adk.ChatModelAgent, input *Volume
 %s
 
 要求：
-1. 顶层字段只能是 volumes。
-2. 输出必须仍然是可直接保存的分卷 JSON。
-3. 发现逻辑问题时直接在结果中修正，而不是输出问题列表。
-4. 不要输出解释文字。`, input.Genre, input.Outline, input.Plotlines, input.Volumes, input.TargetVolume, input.UserSuggestion)
+1. 顶层字段必须是 suggestions。
+2. 每条建议包含 suggestion（修改建议）、target（修改目标类型）、id（目标ID）。
+3. 如果所有分卷都合理，输出空数组：{"suggestions": []}
+4. 不要输出解释文字，只输出 JSON。`, input.Genre, input.Outline, input.Plotlines, input.Volumes, input.TargetVolume, input.UserSuggestion)
 
-	return runVolumeJSONQuery(ctx, agent, query, "分卷审核")
+	return runVolumeReviewJSONQuery(ctx, agent, query, "分卷审核")
 }

@@ -42,7 +42,9 @@ type VolumeWorkflowInput struct {
 
 ## 输出契约
 
-所有分卷 Agent 的输出都必须收敛为统一 JSON，顶层只允许 `volumes`：
+### 分卷生成/润色/修改 Agent 输出格式
+
+所有分卷 Agent（生成、润色、修改）的输出都必须收敛为统一 JSON，顶层只允许 `volumes`：
 
 ```json
 {
@@ -74,6 +76,41 @@ type VolumeWorkflowInput struct {
 - `created_at`、`updated_at` 不要求 Agent 输出，保存层自动维护
 - `deleted_at` 不出现在 Agent 输出中
 
+### 分卷审核 Agent 输出格式
+
+分卷审核 Agent 输出格式为 `suggestions` 数组，每条建议包含修改建议、修改目标类型和目标ID：
+
+```json
+{
+  "suggestions": [
+    {
+      "suggestion": "第一卷容量过大，建议拆分为两卷，第一卷聚焦主角成长，第二卷聚焦势力冲突",
+      "target": "volume",
+      "id": 1
+    },
+    {
+      "suggestion": "第二卷与第三卷之间缺少过渡，建议在第二卷结尾增加伏笔",
+      "target": "volume",
+      "id": 2
+    },
+    {
+      "suggestion": "分卷划分与剧情线3的发展节奏不匹配，建议调整第三卷的大纲",
+      "target": "plotline",
+      "id": 3
+    }
+  ]
+}
+```
+
+约束如下：
+
+- 顶层字段只能是 `suggestions`
+- `suggestions` 必须是数组，可以为空（表示所有分卷都合理）
+- 每条建议必须包含 `suggestion`（修改建议）、`target`（修改目标类型）、`id`（目标ID）
+- `target` 必须是 `outline`、`plotline`、`character`、`volume` 之一
+- `id` 必须是对应目标的真实ID
+- 如果所有分卷都合理，输出空数组：`{"suggestions": []}`
+
 ## 数据模型
 
 当前分卷模型核心字段如下：
@@ -95,7 +132,7 @@ type Volume struct {
 
 ## 工作流
 
-当前统一分卷工作流保留两种模式。
+当前统一分卷工作流支持三种模式。
 
 ### 完整工作流模式
 
@@ -107,6 +144,18 @@ type Volume struct {
 START -> init -> generate -> polish -> review -> revise -> saveToDB -> END
 ```
 
+### 快速新增模式
+
+触发条件：`NovelID + UserSuggestion`（无 `VolumeID`）
+
+执行流程：
+
+```text
+START -> init -> polish -> review -> revise -> saveToDB -> END
+```
+
+说明：根据用户建议直接新增分卷，跳过生成节点，从润色节点开始。
+
 ### 快速修改模式
 
 触发条件：`NovelID + VolumeID + UserSuggestion`
@@ -116,6 +165,8 @@ START -> init -> generate -> polish -> review -> revise -> saveToDB -> END
 ```text
 START -> init -> polish -> review -> revise -> saveToDB -> END
 ```
+
+说明：修改指定的已有分卷，跳过生成节点，从润色节点开始。
 
 ## 节点语义
 
@@ -147,7 +198,9 @@ START -> init -> polish -> review -> revise -> saveToDB -> END
 
 - 调用分卷审核 Agent
 - 检查卷与卷之间的连续性、节奏、主题一致性和剧情承接关系
-- 输出仍然是统一 `volumes` JSON
+- **输出格式为 `suggestions` 数组**，包含修改建议、修改目标类型（outline/plotline/character/volume）和目标ID
+- 如果所有分卷都合理，输出空数组：`{"suggestions": []}`
+- 审核结果保存到 `data/content/{author}/{novelName}/volume/审核.json`
 
 ### revise
 
@@ -183,9 +236,15 @@ START -> init -> polish -> review -> revise -> saveToDB -> END
 
 ```go
 func routeAfterInit(ctx context.Context, state *VolumeWorkflowState) (string, error) {
-    if state.VolumeID > 0 && state.UserSuggestion != "" {
+    // 快速修改模式：只有小说ID和用户建议，直接跳到润色节点（用于新增卷）
+    if state.NovelID > 0 && state.UserSuggestion != "" && state.VolumeID == 0 {
         return "polish", nil
     }
+    // 修订模式：有小说ID、分卷ID和用户建议（用于修改已有卷）
+    if state.RevisionMode {
+        return "polish", nil
+    }
+    // 完整生成模式：有小说ID，从生成节点开始
     if state.NovelID > 0 {
         return "generate", nil
     }
@@ -198,6 +257,29 @@ func routeAfterInit(ctx context.Context, state *VolumeWorkflowState) (string, er
 - 当前节点成功则进入下一节点
 - 当前节点失败且未达到最大重试次数，则重试当前节点
 - 达到最大重试次数后终止工作流并返回带上下文的错误信息
+
+## 日志输出
+
+所有节点都包含详细的日志输出，参考大纲 outline 工作流的日志格式：
+
+- `workflow.input`: 工作流输入日志
+- `workflow.output`: 工作流输出日志
+- `node.input`: 节点输入日志（包含当前状态）
+- `node.output`: 节点输出日志（包含执行结果）
+
+日志字段包括：
+- `workflow`: 工作流名称（volume）
+- `node`: 节点名称（init/generate/polish/review/revise/saveToDB）
+- `novel_id`: 小说ID
+- `volume_id`: 分卷ID
+- `current_node`: 当前节点状态
+- `generated_chars`: 生成阶段字符数
+- `polished_chars`: 润色阶段字符数
+- `reviewed_chars`: 审核阶段字符数
+- `revised_chars`: 修改阶段字符数
+- `saved_volume_ids`: 保存的分卷ID列表
+- `retry_count`: 重试次数
+- `error_msg`: 错误信息
 
 ## 阶段文件
 
@@ -229,12 +311,14 @@ data/content/{author}/{novelName}/volume/
 internal/volume/
 ├── README.md
 ├── agents/
+│   ├── common.go
 │   ├── volume_generator_agent.go
 │   ├── volume_polisher_agent.go
 │   ├── volume_reviewer_agent.go
 │   └── volume_reviser_agent.go
 ├── compose/
 │   ├── agent_executor.go
+│   ├── logger.go
 │   ├── nodes.go
 │   ├── router.go
 │   └── volume_workflow.go

@@ -146,3 +146,66 @@ func normalizeVolumeStatus(status string) (string, error) {
 		return "", fmt.Errorf("unsupported status %q", normalized)
 	}
 }
+
+// VolumeReviewPayload 是分卷审核输出结构。
+type VolumeReviewPayload struct {
+	Suggestions []VolumeReviewSuggestion `json:"suggestions"`
+}
+
+// VolumeReviewSuggestion 表示单条审核建议。
+type VolumeReviewSuggestion struct {
+	Suggestion string `json:"suggestion"` // 修改建议
+	Target     string `json:"target"`     // 修改目标：outline/plotline/character/volume
+	ID         uint   `json:"id"`         // 目标ID
+}
+
+// NormalizeVolumeReviewPayload 校验并规范化审核 Agent 输出。
+func NormalizeVolumeReviewPayload(raw string) (string, *VolumeReviewPayload, error) {
+	var payload VolumeReviewPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return "", nil, fmt.Errorf("解析 review suggestions JSON 失败: %w", err)
+	}
+	if payload.Suggestions == nil {
+		return "", nil, fmt.Errorf("suggestions 字段不能为空（应为数组，可以是空数组 []）")
+	}
+
+	// 允许空的 suggestions 数组（表示所有分卷都合理，无需修改）
+	if len(payload.Suggestions) == 0 {
+		normalized, err := json.Marshal(&payload)
+		if err != nil {
+			return "", nil, fmt.Errorf("序列化 review suggestions JSON 失败: %w", err)
+		}
+		return string(normalized), &payload, nil
+	}
+
+	for i, item := range payload.Suggestions {
+		item.Suggestion = strings.TrimSpace(item.Suggestion)
+		item.Target = strings.TrimSpace(item.Target)
+
+		if item.Suggestion == "" {
+			return "", nil, fmt.Errorf("第%d条建议的 suggestion 不能为空", i+1)
+		}
+		if item.Target == "" {
+			return "", nil, fmt.Errorf("第%d条建议的 target 不能为空", i+1)
+		}
+		if item.ID == 0 {
+			return "", nil, fmt.Errorf("第%d条建议的 id 不能为 0", i+1)
+		}
+
+		// 验证 target 字段的有效性
+		switch item.Target {
+		case "outline", "plotline", "character", "volume":
+			// 有效的 target
+		default:
+			return "", nil, fmt.Errorf("第%d条建议的 target 无效: %s（应为 outline/plotline/character/volume）", i+1, item.Target)
+		}
+
+		payload.Suggestions[i] = item
+	}
+
+	normalized, err := json.Marshal(&payload)
+	if err != nil {
+		return "", nil, fmt.Errorf("序列化 review suggestions JSON 失败: %w", err)
+	}
+	return string(normalized), &payload, nil
+}
