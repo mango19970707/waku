@@ -329,6 +329,9 @@ func reviseNode(ctx context.Context, chatModel einoModel.BaseChatModel) func(con
 	}
 }
 
+// saveToDBNode 已废弃，由 preSaveNode + mapIDsNode + updateRelationshipsNode 三个节点替代
+// 保留此函数以防需要回滚
+/*
 func saveToDBNode(characterRepo repository.CharacterRepository) func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
 	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
 		if len(state.SavedCharacterIDs) > 0 {
@@ -441,6 +444,7 @@ func saveToDBNode(characterRepo repository.CharacterRepository) func(context.Con
 		return state, nil
 	}
 }
+*/
 
 func loadCharactersFromDB(characterRepo repository.CharacterRepository, novelID uint) (map[string]any, error) {
 	characters, err := characterRepo.GetByNovelID(novelID)
@@ -576,4 +580,338 @@ func unmarshalPayloadMap(raw string) (map[string]any, error) {
 		return nil, err
 	}
 	return payload, nil
+}
+
+// preSaveNode 预保存节点：批量插入角色（relationships为空），获取真实ID，建立映射表
+func preSaveNode(characterRepo repository.CharacterRepository) func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+		if len(state.IDMapping) > 0 {
+			state.CurrentNode = "preSave_success"
+			return state, nil
+		}
+
+		revisedJSON, err := marshalPayload(state.RevisedCharacters)
+		if err != nil {
+			state.CurrentNode = "preSave_failed"
+			state.ErrorMsg = fmt.Sprintf("序列化最终角色失败: %v", err)
+			return state, nil
+		}
+
+		normalized, payload, err := contracts.NormalizeCharacterPayload(revisedJSON)
+		if err != nil {
+			state.CurrentNode = "preSave_failed"
+			state.ErrorMsg = fmt.Sprintf("最终角色格式无效: %v", err)
+			return state, nil
+		}
+
+		revisedMap, err := parseCharacterPayloadMap(normalized)
+		if err != nil {
+			state.CurrentNode = "preSave_failed"
+			state.ErrorMsg = fmt.Sprintf("解析最终角色失败: %v", err)
+			return state, nil
+		}
+		state.RevisedCharacters = revisedMap
+
+		// 加载现有角色
+		existing, err := characterRepo.GetByNovelID(state.NovelID)
+		if err != nil {
+			state.CurrentNode = "preSave_failed"
+			state.ErrorMsg = fmt.Sprintf("加载现有角色失败: %v", err)
+			return state, nil
+		}
+
+		existingByID := make(map[uint]*model.Character, len(existing))
+		for _, item := range existing {
+			existingByID[item.ID] = item
+		}
+
+		// 初始化ID映射表
+		idMapping := make(map[uint]uint)
+		var toCreate []*model.Character
+		var toUpdate []*model.Character
+		savedIDs := make([]uint, 0, len(payload.Characters))
+
+		// 遍历所有角色，区分新角色和已有角色
+		for _, item := range payload.Characters {
+			characterModel, err := contracts.CharacterMapToModel(item, state.NovelID)
+			if err != nil {
+				state.CurrentNode = "preSave_failed"
+				state.ErrorMsg = err.Error()
+				return state, nil
+			}
+
+			// 临时清空 relationships，稍后统一更新
+			tempID := characterModel.ID
+			characterModel.Relationships = model.RelationshipMap{}
+
+			// 判断是已有角色还是新角色
+			if tempID > 0 {
+				if existingItem, ok := existingByID[tempID]; ok {
+					// 已有角色：更新基础信息（不含relationships）
+					existingItem.NovelID = state.NovelID
+					existingItem.Name = characterModel.Name
+					existingItem.Role = characterModel.Role
+					existingItem.Age = characterModel.Age
+					existingItem.Gender = characterModel.Gender
+					existingItem.Appearance = characterModel.Appearance
+					existingItem.Personality = characterModel.Personality
+					existingItem.Background = characterModel.Background
+					existingItem.PlotlineIDs = characterModel.PlotlineIDs
+					existingItem.Relationships = model.RelationshipMap{} // 暂时清空
+					toUpdate = append(toUpdate, existingItem)
+					idMapping[tempID] = tempID // 已有角色，ID不变
+					savedIDs = append(savedIDs, tempID)
+				} else {
+					// ID存在但数据库中找不到，视为新角色
+					characterModel.ID = 0
+					toCreate = append(toCreate, characterModel)
+				}
+			} else {
+				// 新角色
+				toCreate = append(toCreate, characterModel)
+			}
+		}
+
+		// 批量更新已有角色
+		for _, item := range toUpdate {
+			if err := characterRepo.Update(item); err != nil {
+				state.CurrentNode = "preSave_failed"
+				state.ErrorMsg = fmt.Sprintf("更新角色失败: %v", err)
+				return state, nil
+			}
+		}
+
+		// 批量插入新角色
+		if len(toCreate) > 0 {
+			if err := characterRepo.CreateBatch(toCreate); err != nil {
+				state.CurrentNode = "preSave_failed"
+				state.ErrorMsg = fmt.Sprintf("创建角色失败: %v", err)
+				return state, nil
+			}
+
+			// 为新角色建立临时ID到真实ID的映射
+			// 假设新角色的临时ID从1开始递增
+			tempIDCounter := uint(1)
+			for _, item := range toCreate {
+				// 找到对应的临时ID
+				for _, rawItem := range payload.Characters {
+					rawID := uint(0)
+					if id, ok := rawItem["id"]; ok {
+						switch v := id.(type) {
+						case float64:
+							rawID = uint(v)
+						case int:
+							rawID = uint(v)
+						case uint:
+							rawID = v
+						}
+					}
+					rawName, _ := rawItem["name"].(string)
+					if rawName == item.Name && rawID > 0 && rawID < 1000 {
+						// 临时ID通常较小（1-999），真实ID通常较大
+						idMapping[rawID] = item.ID
+						break
+					}
+				}
+				savedIDs = append(savedIDs, item.ID)
+				tempIDCounter++
+			}
+		}
+
+		// 删除不在最终列表中的旧角色
+		seen := make(map[uint]struct{}, len(savedIDs))
+		for _, id := range savedIDs {
+			seen[id] = struct{}{}
+		}
+		for _, item := range existing {
+			if _, ok := seen[item.ID]; !ok {
+				if err := characterRepo.Delete(item.ID); err != nil {
+					state.CurrentNode = "preSave_failed"
+					state.ErrorMsg = fmt.Sprintf("删除旧角色失败: %v", err)
+					return state, nil
+				}
+			}
+		}
+
+		state.IDMapping = idMapping
+		state.SavedCharacterIDs = savedIDs
+		state.CurrentNode = "preSave_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+// mapIDsNode ID映射节点：将所有角色的relationships中的临时ID转换为真实ID
+func mapIDsNode() func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+		if !isEmptyPayload(state.MappedCharacters) {
+			state.CurrentNode = "mapIDs_success"
+			return state, nil
+		}
+
+		if len(state.IDMapping) == 0 {
+			state.CurrentNode = "mapIDs_failed"
+			state.ErrorMsg = "ID映射表为空"
+			return state, nil
+		}
+
+		revisedJSON, err := marshalPayload(state.RevisedCharacters)
+		if err != nil {
+			state.CurrentNode = "mapIDs_failed"
+			state.ErrorMsg = fmt.Sprintf("序列化角色数据失败: %v", err)
+			return state, nil
+		}
+
+		_, payload, err := contracts.NormalizeCharacterPayload(revisedJSON)
+		if err != nil {
+			state.CurrentNode = "mapIDs_failed"
+			state.ErrorMsg = fmt.Sprintf("解析角色数据失败: %v", err)
+			return state, nil
+		}
+
+		// 遍历所有角色，转换relationships中的ID
+		for _, item := range payload.Characters {
+			relationships, exists, err := normalizeRelationshipsField(item, "relationships")
+			if err != nil || !exists || len(relationships) == 0 {
+				continue
+			}
+
+			// 转换relationships的键（临时ID → 真实ID）
+			mappedRelationships := make(map[string]string)
+			for oldKey, value := range relationships {
+				// 解析旧键（可能是临时ID）
+				oldID := uint(0)
+				if _, err := fmt.Sscanf(oldKey, "%d", &oldID); err == nil && oldID > 0 {
+					// 查找映射表
+					if newID, ok := state.IDMapping[oldID]; ok {
+						// 找到映射，使用真实ID
+						mappedRelationships[fmt.Sprintf("%d", newID)] = value
+					} else {
+						// 未找到映射，保持原样（可能已经是真实ID）
+						mappedRelationships[oldKey] = value
+					}
+				} else {
+					// 无法解析为数字，保持原样
+					mappedRelationships[oldKey] = value
+				}
+			}
+			item["relationships"] = mappedRelationships
+		}
+
+		// 转换角色自身的ID
+		for _, item := range payload.Characters {
+			if rawID, ok := item["id"]; ok {
+				oldID := uint(0)
+				switch v := rawID.(type) {
+				case float64:
+					oldID = uint(v)
+				case int:
+					oldID = uint(v)
+				case uint:
+					oldID = v
+				}
+				if oldID > 0 {
+					if newID, ok := state.IDMapping[oldID]; ok {
+						item["id"] = newID
+					}
+				}
+			}
+		}
+
+		mappedJSON, err := json.Marshal(payload)
+		if err != nil {
+			state.CurrentNode = "mapIDs_failed"
+			state.ErrorMsg = fmt.Sprintf("序列化映射后的角色失败: %v", err)
+			return state, nil
+		}
+
+		mappedMap, err := parseCharacterPayloadMap(string(mappedJSON))
+		if err != nil {
+			state.CurrentNode = "mapIDs_failed"
+			state.ErrorMsg = fmt.Sprintf("解析映射后的角色失败: %v", err)
+			return state, nil
+		}
+
+		state.MappedCharacters = mappedMap
+		state.CurrentNode = "mapIDs_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+// updateRelationshipsNode 关系更新节点：批量更新数据库中的relationships字段
+func updateRelationshipsNode(characterRepo repository.CharacterRepository) func(context.Context, *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+	return func(ctx context.Context, state *CharacterWorkflowState) (*CharacterWorkflowState, error) {
+		mappedJSON, err := marshalPayload(state.MappedCharacters)
+		if err != nil {
+			state.CurrentNode = "updateRelationships_failed"
+			state.ErrorMsg = fmt.Sprintf("序列化映射后的角色失败: %v", err)
+			return state, nil
+		}
+
+		_, payload, err := contracts.NormalizeCharacterPayload(mappedJSON)
+		if err != nil {
+			state.CurrentNode = "updateRelationships_failed"
+			state.ErrorMsg = fmt.Sprintf("解析映射后的角色失败: %v", err)
+			return state, nil
+		}
+
+		// 批量更新每个角色的relationships字段
+		for _, item := range payload.Characters {
+			characterModel, err := contracts.CharacterMapToModel(item, state.NovelID)
+			if err != nil {
+				state.CurrentNode = "updateRelationships_failed"
+				state.ErrorMsg = fmt.Sprintf("转换角色模型失败: %v", err)
+				return state, nil
+			}
+
+			if characterModel.ID == 0 {
+				state.CurrentNode = "updateRelationships_failed"
+				state.ErrorMsg = "角色ID不能为0"
+				return state, nil
+			}
+
+			// 只更新relationships字段
+			existingCharacter, err := characterRepo.GetByID(characterModel.ID)
+			if err != nil {
+				state.CurrentNode = "updateRelationships_failed"
+				state.ErrorMsg = fmt.Sprintf("加载角色失败: %v", err)
+				return state, nil
+			}
+
+			existingCharacter.Relationships = characterModel.Relationships
+			if err := characterRepo.Update(existingCharacter); err != nil {
+				state.CurrentNode = "updateRelationships_failed"
+				state.ErrorMsg = fmt.Sprintf("更新角色关系失败: %v", err)
+				return state, nil
+			}
+		}
+
+		state.CurrentNode = "updateRelationships_success"
+		state.RetryCount = 0
+		return state, nil
+	}
+}
+
+func normalizeRelationshipsField(item map[string]any, key string) (map[string]string, bool, error) {
+	value, ok := item[key]
+	if !ok || value == nil {
+		return nil, false, nil
+	}
+	if typed, ok := value.(map[string]string); ok {
+		return typed, true, nil
+	}
+	rawMap, ok := value.(map[string]any)
+	if !ok {
+		return nil, true, fmt.Errorf("应为对象")
+	}
+	result := make(map[string]string, len(rawMap))
+	for rawKey, rawValue := range rawMap {
+		valueStr, ok := rawValue.(string)
+		if !ok {
+			return nil, true, fmt.Errorf("关系值必须为字符串")
+		}
+		result[strings.TrimSpace(rawKey)] = strings.TrimSpace(valueStr)
+	}
+	return result, true, nil
 }

@@ -30,6 +30,8 @@ type CharacterWorkflowState struct {
 	PolishedCharacters  map[string]any
 	ReviewedCharacters  map[string]any
 	RevisedCharacters   map[string]any
+	IDMapping           map[uint]uint // 临时ID → 真实ID 的映射
+	MappedCharacters    map[string]any
 	SavedCharacterIDs   []uint
 	ErrorMsg            string
 	RetryCount          int
@@ -52,7 +54,9 @@ func BuildCharacterWorkflowGraph(
 	graph.AddLambdaNode("polish", compose.InvokableLambda(polishNode(ctx, chatModel)))
 	graph.AddLambdaNode("review", compose.InvokableLambda(reviewNode(ctx, chatModel)))
 	graph.AddLambdaNode("revise", compose.InvokableLambda(reviseNode(ctx, chatModel)))
-	graph.AddLambdaNode("saveToDB", compose.InvokableLambda(saveToDBNode(characterRepo)))
+	graph.AddLambdaNode("preSave", compose.InvokableLambda(preSaveNode(characterRepo)))
+	graph.AddLambdaNode("mapIDs", compose.InvokableLambda(mapIDsNode()))
+	graph.AddLambdaNode("updateRelationships", compose.InvokableLambda(updateRelationshipsNode(characterRepo)))
 
 	graph.AddEdge(compose.START, "init")
 	graph.AddBranch("init", compose.NewGraphBranch(routeAfterInit, map[string]bool{
@@ -72,12 +76,20 @@ func BuildCharacterWorkflowGraph(
 		"revise": true,
 	}))
 	graph.AddBranch("revise", compose.NewGraphBranch(routeAfterRevise, map[string]bool{
-		"revise":   true,
-		"saveToDB": true,
+		"revise":  true,
+		"preSave": true,
 	}))
-	graph.AddBranch("saveToDB", compose.NewGraphBranch(routeAfterSave, map[string]bool{
-		"saveToDB":  true,
-		compose.END: true,
+	graph.AddBranch("preSave", compose.NewGraphBranch(routeAfterPreSave, map[string]bool{
+		"preSave": true,
+		"mapIDs":  true,
+	}))
+	graph.AddBranch("mapIDs", compose.NewGraphBranch(routeAfterMapIDs, map[string]bool{
+		"mapIDs":              true,
+		"updateRelationships": true,
+	}))
+	graph.AddBranch("updateRelationships", compose.NewGraphBranch(routeAfterUpdateRelationships, map[string]bool{
+		"updateRelationships": true,
+		compose.END:            true,
 	}))
 
 	return graph.Compile(ctx, compose.WithMaxRunSteps(50))

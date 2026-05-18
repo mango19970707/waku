@@ -30,11 +30,19 @@ func routeAfterReview(ctx context.Context, state *CharacterWorkflowState) (strin
 }
 
 func routeAfterRevise(ctx context.Context, state *CharacterWorkflowState) (string, error) {
-	return routeWithRetry(state, "revise_success", "saveToDB", "revise")
+	return routeWithRetry(state, "revise_success", "preSave", "revise")
 }
 
-func routeAfterSave(ctx context.Context, state *CharacterWorkflowState) (string, error) {
-	return routeWithRetry(state, "save_success", compose.END, "saveToDB")
+func routeAfterPreSave(ctx context.Context, state *CharacterWorkflowState) (string, error) {
+	return routeWithRetry(state, "preSave_success", "mapIDs", "preSave")
+}
+
+func routeAfterMapIDs(ctx context.Context, state *CharacterWorkflowState) (string, error) {
+	return routeWithRetry(state, "mapIDs_success", "updateRelationships", "mapIDs")
+}
+
+func routeAfterUpdateRelationships(ctx context.Context, state *CharacterWorkflowState) (string, error) {
+	return routeWithRetry(state, "updateRelationships_success", compose.END, "updateRelationships")
 }
 
 func routeWithRetry(state *CharacterWorkflowState, successNode, nextNode, retryNode string) (string, error) {

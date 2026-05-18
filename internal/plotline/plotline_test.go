@@ -62,7 +62,7 @@ func TestPlotlineWorkflowGraph_FullGeneration(t *testing.T) {
 	require.NoError(t, err)
 
 	input := &compose.PlotlineWorkflowInput{
-		NovelID: 6,
+		NovelID: 1,
 	}
 
 	result, _ := compose.ExecutePlotlineWorkflow(ctx, graph, input)
