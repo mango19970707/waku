@@ -35,6 +35,18 @@ type Chapter struct {
 	// WordCount 字数统计
 	WordCount int `gorm:"default:0" json:"word_count"`
 
+	// WordCountEstimate 预估字数
+	WordCountEstimate int `gorm:"default:0" json:"word_count_estimate"`
+
+	// KeyEvents 关键事件列表
+	KeyEvents StringArray `gorm:"type:text" json:"key_events"`
+
+	// KeyCharacters 关键角色列表
+	KeyCharacters StringArray `gorm:"type:text" json:"key_characters"`
+
+	// PlotlineProgress 剧情线进度（JSON 对象，格式：{"剧情线ID": "进度描述"}）
+	PlotlineProgress PlotlineProgressMap `gorm:"type:text" json:"plotline_progress"`
+
 	// Status 章节状态（draft-草稿、writing-连载中、completed-已完结）
 	Status string `gorm:"type:varchar(20);default:'draft'" json:"status"`
 

@@ -29,6 +29,8 @@ func Migrate(db *gorm.DB) error {
 		&model.Abstract{},
 		&model.Character{},
 		&model.Plotline{},
+		&model.PlotlineProgress{},
+		&model.Event{},
 		&model.Memory{},
 	}
 
@@ -54,6 +56,8 @@ func DropAllTables(db *gorm.DB) error {
 	// 定义需要删除的所有模型（按依赖关系逆序）
 	models := []interface{}{
 		&model.Memory{},
+		&model.Event{},
+		&model.PlotlineProgress{},
 		&model.Plotline{},
 		&model.Character{},
 		&model.Abstract{},
