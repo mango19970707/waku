@@ -423,8 +423,10 @@ func saveToDBNode(chapterRepo chapterrepository.ChapterRepository) func(context.
 			return state, nil
 		}
 
+		// 完整工作流表示重新划分当前分卷章节，需要用最终结果完全覆盖旧章节。
+		replaceVolumeChapters := !state.RevisionMode && state.UserSuggestion == ""
 		// 保存章节
-		savedIDs, err := saveChaptersToDB(chapterRepo, payload.Chapters, state.NovelID, state.VolumeID, state.RevisionMode)
+		savedIDs, err := saveChaptersToDB(chapterRepo, payload.Chapters, state.NovelID, state.VolumeID, replaceVolumeChapters)
 		if err != nil {
 			state.CurrentNode = "save_failed"
 			state.ErrorMsg = fmt.Sprintf("保存章节到数据库失败: %v", err)
@@ -610,28 +612,58 @@ func normalizeRevisedChapters(baseJSON, revisedJSON string) (string, *contracts.
 	return mergeRevisedChapters(baseJSON, revisedJSON)
 }
 
-func saveChaptersToDB(repo chapterrepository.ChapterRepository, items []contracts.ChapterItem, novelID, volumeID uint, revisionMode bool) ([]uint, error) {
-	// 转换为模型
+func saveChaptersToDB(repo chapterrepository.ChapterRepository, items []contracts.ChapterItem, novelID, volumeID uint, replaceVolumeChapters bool) ([]uint, error) {
 	chapters := make([]*model.Chapter, len(items))
 	for i, item := range items {
+		// 保存阶段统一收口小说和分卷归属，避免 Agent 输出串改归属关系。
 		item.NovelID = novelID
 		item.VolumeID = volumeID
-		if !revisionMode {
+		if replaceVolumeChapters {
+			// 重新章节划分会先清空当前分卷旧章节，新章节全部交由数据库重新分配 ID。
 			item.ID = 0
 		}
 		chapters[i] = item.ToModel()
 	}
 
-	// 批量保存
-	if err := repo.CreateBatch(chapters); err != nil {
-		return nil, err
+	if replaceVolumeChapters {
+		// 完整工作流的语义是覆盖当前分卷：先删旧数据，再创建本次最终章节列表。
+		if err := repo.DeleteByVolumeID(volumeID); err != nil {
+			return nil, err
+		}
+		if err := repo.CreateBatch(chapters); err != nil {
+			return nil, err
+		}
+		return collectChapterIDs(chapters), nil
 	}
 
-	// 收集保存的ID
-	ids := make([]uint, len(chapters))
-	for i, ch := range chapters {
-		ids[i] = ch.ID
+	ids := make([]uint, 0, len(chapters))
+	createChapters := make([]*model.Chapter, 0)
+	for _, chapter := range chapters {
+		if chapter.ID > 0 {
+			// 快速修改模式保留原章节 ID，只更新本次输出涉及的章节。
+			if err := repo.Update(chapter); err != nil {
+				return nil, err
+			}
+			ids = append(ids, chapter.ID)
+			continue
+		}
+		createChapters = append(createChapters, chapter)
+	}
+	if len(createChapters) > 0 {
+		// 快速新增模式只创建新增章节，不删除当前分卷其他章节。
+		if err := repo.CreateBatch(createChapters); err != nil {
+			return nil, err
+		}
+		ids = append(ids, collectChapterIDs(createChapters)...)
 	}
 
 	return ids, nil
+}
+
+func collectChapterIDs(chapters []*model.Chapter) []uint {
+	ids := make([]uint, len(chapters))
+	for i, chapter := range chapters {
+		ids[i] = chapter.ID
+	}
+	return ids
 }

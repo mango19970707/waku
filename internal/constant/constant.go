@@ -12,6 +12,8 @@ const (
 	FileTypeVolume = "volume"
 	// FileTypeChapter 章节文件类型
 	FileTypeChapter = "chapter"
+	// FileTypeContent 正文文件类型
+	FileTypeContent = "content"
 )
 
 // 大纲处理阶段常量

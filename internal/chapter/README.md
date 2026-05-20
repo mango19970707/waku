@@ -28,7 +28,7 @@ Chapter 模块负责小说章节的生成、润色、审核和修改。围绕 4 
 - `volume_id` 为必填，类型为 `uint`（章节必须属于某个分卷）
 - `chapter_id` 为可选，类型为 `uint`
 - `user_suggestion` 为可选，类型为 `string`
-- 当输入只有 `novel_id` 和 `volume_id` 时，走完整工作流（为该卷生成所有章节）
+- 当输入只有 `novel_id` 和 `volume_id` 时，走完整工作流（为该卷重新进行章节划分）
 - 当输入同时具备 `novel_id`、`volume_id`、`user_suggestion`（无 `chapter_id`）时，从 `init` 直接跳到 `polish`（快速新增章节）
 - 当输入同时具备 `novel_id`、`volume_id`、`chapter_id`、`user_suggestion` 时，从 `init` 直接跳到 `polish`（快速修改章节）
 - `volume_id` 指向的卷必须属于当前 `novel_id`
@@ -84,7 +84,7 @@ type ChapterWorkflowInput struct {
 - 已有章节在修改流程中必须保留原有 `id`
 - 新增章节可以省略 `id`，保存时由数据库自增生成
 - `novel_id` 和 `volume_id` 在保存阶段统一写入当前工作流的 `NovelID` 和 `VolumeID`
-- `chapter_number` 必须在当前卷内连续且唯一
+- `chapter_number` 必须在当前卷内从 1 开始连续且唯一；不同分卷之间的章节号互不影响
 - `word_count_estimate` 为预估字数，建议范围 2000-5000
 - `key_events` 为本章关键事件列表，用于剧情追踪
 - `key_characters` 为本章出场的关键角色列表
@@ -173,7 +173,7 @@ type Chapter struct {
 START -> init -> generate -> polish -> review -> revise -> saveToDB -> END
 ```
 
-说明：为指定分卷生成完整的章节列表。
+说明：为指定分卷重新进行完整章节划分。章节号按当前分卷从 1 开始连续编号，保存时以本次最终章节列表完全覆盖该分卷旧章节数据。
 
 ### 快速新增模式
 
@@ -217,6 +217,7 @@ START -> init -> polish -> review -> revise -> saveToDB -> END
 - 调用章节生成 Agent
 - 输入为小说大纲、分卷大纲、剧情线列表、角色列表和已有章节上下文
 - 输出初始 `chapters` JSON
+- 重新章节划分时，已有章节仅作为上下文参考，不要求保留旧章节的 `id`、章节号或内容
 - 支持阶段文件读取，避免重复生成
 - 生成结果保存到 `data/content/{author}/{novelName}/volume_{volumeNumber}/chapter/章节规划.json`
 - 仅在完整工作流模式下执行
@@ -255,10 +256,10 @@ START -> init -> polish -> review -> revise -> saveToDB -> END
 ### saveToDB
 
 - 对最终章节 JSON 做统一校验
-- 校验 `chapter_number` 在当前卷内连续且唯一
+- 校验 `chapter_number` 在当前卷内从 1 开始连续且唯一
 - 有 `id` 的章节执行更新
 - 无 `id` 的章节执行创建
-- 完整工作流模式下，数据库中已存在但不在最终结果里的章节会被删除
+- 完整工作流模式下，视为重新章节划分：保存前删除当前分卷下的全部旧章节，再按本次最终结果重新创建章节，实现完全覆盖旧内容
 - 快速修改模式下，仅更新本次输出涉及的章节，不删除未参与修改的其他章节
 - 保存成功后返回章节ID列表
 
@@ -271,6 +272,8 @@ START -> init -> polish -> review -> revise -> saveToDB -> END
 - `model.Plotline` 列表（全部剧情线）
 - `model.Character` 列表（关键角色）
 - 已存在的 `model.Chapter` 列表（当前分卷的已有章节）
+
+完整工作流重新章节划分时，已有章节只用于帮助 Agent 理解既有铺垫和避免重复设计，不作为必须保留的数据源；最终保存以新章节列表为准，旧章节会被完全覆盖。
 
 这样可以保证：
 
@@ -472,11 +475,12 @@ internal/chapter/
 
 ## 注意事项
 
-1. **章节号必须连续**：章节号从 1 开始，在当前卷内连续且唯一
+1. **章节号必须连续**：章节号从 1 开始，在当前卷内连续且唯一；每个分卷独立编号，不沿用其他分卷的章节号
 2. **剧情线进度追踪**：每章必须记录推进的剧情线和进度
 3. **角色出场记录**：每章必须记录出场的关键角色
 4. **字数预估合理**：字数预估应符合实际写作习惯
 5. **上下文完整**：生成章节前必须加载完整的上下文信息
 6. **修改范围控制**：快速修改模式下，仅修改必要的章节，避免大范围改动
-7. **文件路径规范**：阶段文件保存到 `volume_{volumeNumber}/chapter/` 目录下
-8. **JSON 格式严格**：所有 Agent 输出必须符合契约定义的 JSON 格式
+7. **完整划分覆盖**：完整工作流属于重新章节划分，会以本次最终结果完全覆盖当前分卷旧章节
+8. **文件路径规范**：阶段文件保存到 `volume_{volumeNumber}/chapter/` 目录下
+9. **JSON 格式严格**：所有 Agent 输出必须符合契约定义的 JSON 格式
