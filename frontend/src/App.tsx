@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Archive, ChevronLeft, Lock, Mic, Plus, Send, UserRound } from 'lucide-react';
 
 type Tab = 'creation' | 'profile';
@@ -26,6 +26,14 @@ type Novel = {
   archivedCount: number;
   reviewFrom?: StepKey;
 };
+
+type StepContent = {
+  lines: string[];
+  upstreamSummary: string;
+  aiTip: string;
+};
+
+const apiBase = '/api/h5';
 
 const steps: StepConfig[] = [
   {
@@ -119,6 +127,12 @@ export default function App() {
   const [archiveDialog, setArchiveDialog] = useState(false);
   const [editDialog, setEditDialog] = useState(false);
   const [suggestion, setSuggestion] = useState('');
+  const [stepContent, setStepContent] = useState<StepContent | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    void loadNovels();
+  }, []);
 
   const selectedNovel = useMemo(
     () => novels.find((novel) => novel.id === selectedNovelId) ?? null,
@@ -126,13 +140,28 @@ export default function App() {
   );
   const selectedStep = steps.find((step) => step.key === selectedStepKey) ?? null;
 
-  const openWorkflow = (novelId: number) => {
+  const loadNovels = async () => {
+    try {
+      const payload = await apiGet<{ novels: Array<{ id: number; title: string; genre: string; updated_at: string; archived_count: number }> }>('/novels');
+      setNovels(payload.novels.map((novel) => ({ id: novel.id, title: novel.title, genre: novel.genre || '未分类', updatedAt: formatDate(novel.updated_at), archivedCount: novel.archived_count ?? 0 })));
+    } catch {
+      setToast('后端暂未连接，当前展示本地示例数据。');
+    }
+  };
+
+  const openWorkflow = async (novelId: number) => {
     setSelectedNovelId(novelId);
     setScreen('workflow');
     setToast('');
+    try {
+      const payload = await apiGet<{ archived_count: number }>(`/novels/${novelId}/workflow`);
+      setNovels((current) => current.map((novel) => (novel.id === novelId ? { ...novel, archivedCount: payload.archived_count } : novel)));
+    } catch {
+      setToast('流程状态读取失败，已使用当前缓存状态。');
+    }
   };
 
-  const openStep = (step: StepConfig) => {
+  const openStep = async (step: StepConfig) => {
     if (!selectedNovel) return;
     const index = steps.findIndex((item) => item.key === step.key);
     const status = getStepStatus(selectedNovel, index);
@@ -144,9 +173,18 @@ export default function App() {
     setSelectedStepKey(step.key);
     setScreen('step');
     setToast('');
+    setLoading(true);
+    try {
+      const payload = await apiGet<Record<string, unknown>>(`/novels/${selectedNovel.id}/steps/${step.key}`);
+      setStepContent(normalizeStepContent(step, payload));
+    } catch {
+      setStepContent({ lines: step.sampleContent, upstreamSummary: '接口读取失败，暂时展示本地示例内容。', aiTip: step.aiTip });
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const confirmArchive = () => {
+  const confirmArchive = async () => {
     if (!selectedNovel || !selectedStep) return;
     const index = steps.findIndex((step) => step.key === selectedStep.key);
     setNovels((current) =>
@@ -156,28 +194,78 @@ export default function App() {
           : novel,
       ),
     );
-    setArchiveDialog(false);
-    setScreen('workflow');
+    try {
+      await apiPost(`/novels/${selectedNovel.id}/steps/${selectedStep.key}/archive`, { user_suggestion: suggestion });
+      setToast('归档成功，下一步骤已解锁。');
+    } catch {
+      setToast('归档接口暂不可用，已先更新本地流程状态。');
+    } finally {
+      setArchiveDialog(false);
+      setScreen('workflow');
+    }
   };
 
-  const confirmEditArchived = () => {
+  const confirmEditArchived = async () => {
     if (!selectedNovel || !selectedStep) return;
     setNovels((current) =>
       current.map((novel) => (novel.id === selectedNovel.id ? { ...novel, reviewFrom: selectedStep.key } : novel)),
     );
-    setEditDialog(false);
-    setToast('正在修改归档内容，下游步骤可能需要重新检查。');
+    try {
+      await apiPost(`/novels/${selectedNovel.id}/steps/${selectedStep.key}/edit-archived`, {});
+    } catch {
+      // 修改归档的确认已经由弹窗完成，接口失败时仍允许前端进入风险编辑态，避免阻断用户整理草稿。
+    } finally {
+      setEditDialog(false);
+      setToast('正在修改归档内容，下游步骤可能需要重新检查。');
+    }
   };
 
-  const useVoiceInput = () => {
-    setSuggestion('帮我增加一个亦敌亦友角色');
+  const useVoiceInput = async () => {
+    try {
+      const payload = await apiPost<{ text: string }>('/speech/transcriptions', {});
+      setSuggestion(payload.text);
+    } catch {
+      setSuggestion('帮我增加一个亦敌亦友角色');
+    }
+  };
+
+  const sendSuggestion = async () => {
+    if (!selectedNovel || !selectedStep || !suggestion.trim()) return;
+    try {
+      await apiPost(`/novels/${selectedNovel.id}/steps/${selectedStep.key}/messages`, { user_suggestion: suggestion.trim() });
+      setToast('建议已发送，AI 会围绕当前步骤处理。');
+      setSuggestion('');
+    } catch {
+      setToast('建议发送失败，请检查后端服务是否启动。');
+    }
+  };
+
+  const saveDraft = async () => {
+    if (!selectedNovel || !selectedStep) return;
+    try {
+      await apiPut(`/novels/${selectedNovel.id}/steps/${selectedStep.key}/draft`, { content: { suggestion, lines: stepContent?.lines ?? selectedStep.sampleContent } });
+      setToast('草稿已保存，不会解锁下一步骤。');
+    } catch {
+      setToast('当前步骤草稿保存需要使用对应工作流生成接口。');
+    }
+  };
+
+  const deleteNovel = async (novelId: number) => {
+    if (!window.confirm('删除后不可恢复，确认删除这部小说吗？')) return;
+    setNovels((current) => current.filter((novel) => novel.id !== novelId));
+    try {
+      await apiDelete(`/novels/${novelId}`);
+      setToast('小说已删除。');
+    } catch {
+      setToast('删除接口暂不可用，已先从本地列表移除。');
+    }
   };
 
   return (
     <div className="app-shell">
       <div className="phone-frame">
         {tab === 'creation' ? (
-          <main className="page">{screen === 'list' && <NovelList novels={novels} onOpen={openWorkflow} />}{screen === 'workflow' && selectedNovel && <WorkflowView novel={selectedNovel} onBack={() => setScreen('list')} onOpenStep={openStep} toast={toast} />}{screen === 'step' && selectedNovel && selectedStep && <StepView novel={selectedNovel} step={selectedStep} status={getStepStatus(selectedNovel, steps.findIndex((item) => item.key === selectedStep.key))} suggestion={suggestion} onSuggestion={setSuggestion} onVoice={useVoiceInput} onBack={() => setScreen('workflow')} onArchive={() => setArchiveDialog(true)} onEditArchived={() => setEditDialog(true)} toast={toast} />}</main>
+          <main className="page">{screen === 'list' && <NovelList novels={novels} onOpen={openWorkflow} onDelete={deleteNovel} toast={toast} />}{screen === 'workflow' && selectedNovel && <WorkflowView novel={selectedNovel} onBack={() => setScreen('list')} onOpenStep={openStep} toast={toast} />}{screen === 'step' && selectedNovel && selectedStep && <StepView novel={selectedNovel} step={selectedStep} status={getStepStatus(selectedNovel, steps.findIndex((item) => item.key === selectedStep.key))} suggestion={suggestion} content={stepContent} loading={loading} onSuggestion={setSuggestion} onVoice={useVoiceInput} onSend={sendSuggestion} onSaveDraft={saveDraft} onBack={() => setScreen('workflow')} onArchive={() => setArchiveDialog(true)} onEditArchived={() => setEditDialog(true)} toast={toast} />}</main>
         ) : (
           <ProfileView />
         )}
@@ -192,7 +280,7 @@ export default function App() {
   );
 }
 
-function NovelList({ novels, onOpen }: { novels: Novel[]; onOpen: (id: number) => void }) {
+function NovelList({ novels, onOpen, onDelete, toast }: { novels: Novel[]; onOpen: (id: number) => void; onDelete: (id: number) => void; toast: string }) {
   return (
     <section className="content-pad">
       <header className="page-header">
@@ -202,6 +290,7 @@ function NovelList({ novels, onOpen }: { novels: Novel[]; onOpen: (id: number) =
         </div>
         <button className="icon-button" aria-label="创建小说"><Plus size={18} /></button>
       </header>
+      {toast && <div className="toast">{toast}</div>}
       <div className="card-list">
         {novels.map((novel) => {
           const currentStep = steps[Math.min(novel.archivedCount, steps.length - 1)];
@@ -214,7 +303,7 @@ function NovelList({ novels, onOpen }: { novels: Novel[]; onOpen: (id: number) =
               </div>
               <div className="card-actions">
                 <button className="primary-button" onClick={() => onOpen(novel.id)}>进入流程</button>
-                <button className="text-button">删除</button>
+                <button className="text-button" onClick={() => onDelete(novel.id)}>删除</button>
               </div>
             </article>
           );
@@ -248,7 +337,8 @@ function WorkflowView({ novel, onBack, onOpenStep, toast }: { novel: Novel; onBa
   );
 }
 
-function StepView({ novel, step, status, suggestion, onSuggestion, onVoice, onBack, onArchive, onEditArchived, toast }: { novel: Novel; step: StepConfig; status: StepStatus; suggestion: string; onSuggestion: (value: string) => void; onVoice: () => void; onBack: () => void; onArchive: () => void; onEditArchived: () => void; toast: string }) {
+function StepView({ novel, step, status, suggestion, content, loading, onSuggestion, onVoice, onSend, onSaveDraft, onBack, onArchive, onEditArchived, toast }: { novel: Novel; step: StepConfig; status: StepStatus; suggestion: string; content: StepContent | null; loading: boolean; onSuggestion: (value: string) => void; onVoice: () => void; onSend: () => void; onSaveDraft: () => void; onBack: () => void; onArchive: () => void; onEditArchived: () => void; toast: string }) {
+  const visibleContent = content ?? { lines: step.sampleContent, upstreamSummary: '这里展示当前步骤所需的上游归档摘要，确保创作不跳过依赖。', aiTip: step.aiTip };
   return (
     <section className="step-page">
       <div className="content-pad step-scroll">
@@ -256,25 +346,25 @@ function StepView({ novel, step, status, suggestion, onSuggestion, onVoice, onBa
         {toast && <div className="risk-bar">{toast}</div>}
         <div className="mini-card muted-card">
           <span>{step.upstreamTitle}</span>
-          <p>这里展示当前步骤所需的上游归档摘要，确保创作不跳过依赖。</p>
+          <p>{visibleContent.upstreamSummary}</p>
         </div>
         <section className="block-card">
           <div className="block-title"><Archive size={16} /> 创作内容</div>
-          {step.sampleContent.map((line) => <p key={line}>{line}</p>)}
+          {loading ? <p>正在读取步骤内容...</p> : visibleContent.lines.map((line) => <p key={line}>{line}</p>)}
         </section>
         <section className="block-card">
           <div className="block-title">AI 协作</div>
-          <p>{step.aiTip}</p>
+          <p>{visibleContent.aiTip}</p>
         </section>
       </div>
       <div className="composer">
         <div className="input-row">
           <button aria-label="语音输入" className="mic-button" onClick={onVoice}><Mic size={18} /></button>
           <input value={suggestion} placeholder={step.inputPlaceholder} onChange={(event) => onSuggestion(event.target.value)} />
-          <button aria-label="发送建议" className="send-button"><Send size={16} /></button>
+          <button aria-label="发送建议" className="send-button" onClick={onSend}><Send size={16} /></button>
         </div>
         <div className="composer-actions">
-          <button className="secondary-button">保存草稿</button>
+          <button className="secondary-button" onClick={onSaveDraft}>保存草稿</button>
           {status === 'archived' ? <button className="primary-button" onClick={onEditArchived}>修改归档</button> : <button className="primary-button" onClick={onArchive}>{step.archiveText}</button>}
         </div>
       </div>
@@ -334,4 +424,65 @@ function Dialog({ title, body, confirm, onCancel, onConfirm }: { title: string; 
       </section>
     </div>
   );
+}
+
+async function apiGet<T>(path: string): Promise<T> {
+  return apiRequest<T>(path, { method: 'GET' });
+}
+
+async function apiPost<T = unknown>(path: string, body: unknown): Promise<T> {
+  return apiRequest<T>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+}
+
+async function apiPut<T = unknown>(path: string, body: unknown): Promise<T> {
+  return apiRequest<T>(path, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+}
+
+async function apiDelete<T = unknown>(path: string): Promise<T> {
+  return apiRequest<T>(path, { method: 'DELETE' });
+}
+
+async function apiRequest<T>(path: string, init: RequestInit): Promise<T> {
+  const response = await fetch(`${apiBase}${path}`, init);
+  if (!response.ok) {
+    throw new Error(`接口请求失败：${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+function normalizeStepContent(step: StepConfig, payload: Record<string, unknown>): StepContent {
+  const draft = payload.draft as Record<string, unknown> | undefined;
+  const upstream = payload.upstream_summary ? JSON.stringify(payload.upstream_summary) : '已读取上游归档摘要。';
+  const lines = collectReadableLines(draft);
+  return {
+    lines: lines.length > 0 ? lines : step.sampleContent,
+    upstreamSummary: upstream,
+    aiTip: `已从接口读取“${step.name}”内容，可继续发送建议或保存草稿。`,
+  };
+}
+
+function collectReadableLines(value: unknown): string[] {
+  if (!value) return [];
+  if (typeof value === 'string') return value.trim() ? [value] : [];
+  if (Array.isArray(value)) return value.flatMap(collectReadableLines).slice(0, 8);
+  if (typeof value !== 'object') return [];
+  const record = value as Record<string, unknown>;
+  const preferredKeys = ['title', 'synopsis', 'outline', 'theme', 'description', 'content', 'name'];
+  const direct = preferredKeys.flatMap((key) => (typeof record[key] === 'string' && record[key] ? [`${labelForKey(key)}：${record[key]}`] : []));
+  const nested = Object.entries(record)
+    .filter(([, nestedValue]) => Array.isArray(nestedValue))
+    .flatMap(([key, nestedValue]) => collectReadableLines(nestedValue).map((line) => `${labelForKey(key)}｜${line}`));
+  return [...direct, ...nested].slice(0, 10);
+}
+
+function labelForKey(key: string) {
+  const labels: Record<string, string> = { title: '标题', synopsis: '简介', outline: '大纲', theme: '主题', description: '描述', content: '正文', name: '名称', plotlines: '剧情线', characters: '人物', volumes: '分卷', chapters: '章节' };
+  return labels[key] ?? key;
+}
+
+function formatDate(value: string) {
+  if (!value) return '刚刚更新';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }

@@ -44,6 +44,6 @@ func NewServer(ctx context.Context, configPath string) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("初始化 AI 模型失败: %w", err)
 	}
-	router := NewRouter(Config{WorkflowRunner: NewDefaultWorkflowRunner(db, chatModel)})
+	router := NewRouter(Config{DB: db, WorkflowRunner: NewDefaultWorkflowRunner(db, chatModel)})
 	return &Server{DB: db, Router: router}, nil
 }

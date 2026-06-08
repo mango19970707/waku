@@ -61,7 +61,7 @@ func TestOutlineWorkflowGraph_FullGeneration(t *testing.T) {
 	input := &compose.OutlineWorkflowInput{
 		Author:          "哐啷小牛",
 		Genre:           "玄幻",
-		OriginalOutline: "亿万富豪叶景穿越到万妖大陆，重生为神兽麒麟幼崽，被一个大家族偶然得到，消息泄露后，家族遭隐世世家灭族，唯有一幼女逃脱，男主契约为女孩本命灵兽，助其修炼，复仇",
+		OriginalOutline: "草根崛起退婚流",
 	}
 
 	result, _ := compose.ExecuteOutlineWorkflow(ctx, graph, input)

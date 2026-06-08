@@ -8,9 +8,11 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type Config struct {
+	DB             *gorm.DB
 	WorkflowRunner WorkflowRunner
 }
 
@@ -26,11 +28,30 @@ func NewRouter(cfg Config) *gin.Engine {
 	if runner == nil {
 		runner = &notConfiguredRunner{}
 	}
+	h5 := newH5StateHandler(cfg.DB)
 
 	api := router.Group("/api/h5")
 	api.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+	api.GET("/me", h5.me)
+	api.GET("/me/stats", h5.meStats)
+	api.GET("/novels", h5.listNovels)
+	api.POST("/novels", h5.createNovel)
+	api.DELETE("/novels/:novel_id", h5.deleteNovel)
+	api.GET("/novels/:novel_id/workflow", h5.getWorkflow)
+	api.GET("/novels/:novel_id/steps/:step", h5.getStep)
+	api.PUT("/novels/:novel_id/steps/:step/draft", h5.saveStepDraft)
+	api.POST("/novels/:novel_id/steps/:step/edit-archived", h5.editArchivedStep)
+	api.POST("/novels/:novel_id/steps/:step/rearchive", h5.rearchiveStep)
+	api.GET("/novels/:novel_id/steps/:step/messages", h5.listMessages)
+	api.GET("/novels/:novel_id/steps/:step/messages/stream", h5.streamMessages)
+	api.POST("/novels/:novel_id/steps/:step/messages/:message_id/stop", h5.stopMessage)
+	api.GET("/novels/:novel_id/volumes/:volume_id/chapters", h5.getVolumeChapters)
+	api.GET("/chapters/:chapter_id/content", h5.getChapterContent)
+	api.PUT("/chapters/:chapter_id/content/draft", h5.saveContentDraft)
+	api.POST("/chapters/:chapter_id/content/archive", h5.archiveContent)
+	api.POST("/speech/transcriptions", h5.transcribeSpeech)
 	api.POST("/novels/:novel_id/steps/:step/messages", runStepHandler(runner))
 	api.POST("/novels/:novel_id/steps/:step/generate", runStepHandler(runner))
 	api.POST("/novels/:novel_id/steps/:step/archive", runStepHandler(runner))
