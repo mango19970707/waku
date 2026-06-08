@@ -33,6 +33,26 @@ type StepContent = {
   aiTip: string;
 };
 
+type Profile = {
+  id: number;
+  nickname: string;
+  avatar_url: string;
+  bio: string;
+};
+
+type ProfileStats = {
+  novel_count: number;
+  word_count: number;
+};
+
+type NovelApiItem = {
+  id: number;
+  title: string;
+  genre: string;
+  updated_at: string;
+  archived_count: number;
+};
+
 const apiBase = '/api/h5';
 
 const steps: StepConfig[] = [
@@ -129,10 +149,20 @@ export default function App() {
   const [suggestion, setSuggestion] = useState('');
   const [stepContent, setStepContent] = useState<StepContent | null>(null);
   const [loading, setLoading] = useState(false);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [profileStats, setProfileStats] = useState<ProfileStats | null>(null);
 
   useEffect(() => {
+    // 首屏进入创作中心时主动拉取小说列表；接口失败时保留本地示例，避免 H5 白屏影响联调。
     void loadNovels();
   }, []);
+
+  useEffect(() => {
+    // 个人中心只有在用户切换到该 Tab 时才读取，减少创作页首屏对下游接口的并发请求压力。
+    if (tab === 'profile') {
+      void loadProfile();
+    }
+  }, [tab]);
 
   const selectedNovel = useMemo(
     () => novels.find((novel) => novel.id === selectedNovelId) ?? null,
@@ -142,10 +172,47 @@ export default function App() {
 
   const loadNovels = async () => {
     try {
-      const payload = await apiGet<{ novels: Array<{ id: number; title: string; genre: string; updated_at: string; archived_count: number }> }>('/novels');
-      setNovels(payload.novels.map((novel) => ({ id: novel.id, title: novel.title, genre: novel.genre || '未分类', updatedAt: formatDate(novel.updated_at), archivedCount: novel.archived_count ?? 0 })));
-    } catch {
-      setToast('后端暂未连接，当前展示本地示例数据。');
+      const payload = await apiGet<{ novels: NovelApiItem[] }>('/novels');
+      setNovels(payload.novels.map(normalizeNovel));
+    } catch (error) {
+      setToast(getErrorMessage(error, '后端暂未连接，当前展示本地示例数据。'));
+    }
+  };
+
+  const loadProfile = async () => {
+    try {
+      // 个人资料与统计来自两个后端接口；并发读取可保持 Tab 切换后的响应速度。
+      const [me, stats] = await Promise.all([apiGet<Profile>('/me'), apiGet<ProfileStats>('/me/stats')]);
+      setProfile(me);
+      setProfileStats(stats);
+    } catch (error) {
+      setToast(getErrorMessage(error, '个人中心接口暂不可用，已展示默认信息。'));
+    }
+  };
+
+  const createNovel = async () => {
+    const title = window.prompt('请输入小说标题');
+    if (!title?.trim()) return;
+    const genre = window.prompt('请输入小说类型', '玄幻') ?? '';
+    const originalOutline = window.prompt('请输入初始构思，可稍后在大纲步骤补充', '') ?? '';
+    try {
+      // 创建接口返回完整小说记录；前端只抽取列表所需字段，避免把后端模型细节扩散到 UI 状态。
+      const payload = await apiPost<{ novel: { id: number; title: string; genre: string; updated_at?: string; UpdatedAt?: string }; workflow?: { archived_count?: number } }>('/novels', {
+        title: title.trim(),
+        genre: genre.trim(),
+        original_outline: originalOutline.trim(),
+      });
+      const created = normalizeNovel({
+        id: payload.novel.id,
+        title: payload.novel.title,
+        genre: payload.novel.genre,
+        updated_at: payload.novel.updated_at ?? payload.novel.UpdatedAt ?? new Date().toISOString(),
+        archived_count: payload.workflow?.archived_count ?? 0,
+      });
+      setNovels((current) => [created, ...current]);
+      setToast('小说创建成功，可以进入流程完善大纲。');
+    } catch (error) {
+      setToast(getErrorMessage(error, '创建小说失败，请检查后端服务是否启动。'));
     }
   };
 
@@ -156,8 +223,8 @@ export default function App() {
     try {
       const payload = await apiGet<{ archived_count: number }>(`/novels/${novelId}/workflow`);
       setNovels((current) => current.map((novel) => (novel.id === novelId ? { ...novel, archivedCount: payload.archived_count } : novel)));
-    } catch {
-      setToast('流程状态读取失败，已使用当前缓存状态。');
+    } catch (error) {
+      setToast(getErrorMessage(error, '流程状态读取失败，已使用当前缓存状态。'));
     }
   };
 
@@ -177,8 +244,9 @@ export default function App() {
     try {
       const payload = await apiGet<Record<string, unknown>>(`/novels/${selectedNovel.id}/steps/${step.key}`);
       setStepContent(normalizeStepContent(step, payload));
-    } catch {
+    } catch (error) {
       setStepContent({ lines: step.sampleContent, upstreamSummary: '接口读取失败，暂时展示本地示例内容。', aiTip: step.aiTip });
+      setToast(getErrorMessage(error, '接口读取失败，暂时展示本地示例内容。'));
     } finally {
       setLoading(false);
     }
@@ -197,8 +265,8 @@ export default function App() {
     try {
       await apiPost(`/novels/${selectedNovel.id}/steps/${selectedStep.key}/archive`, { user_suggestion: suggestion });
       setToast('归档成功，下一步骤已解锁。');
-    } catch {
-      setToast('归档接口暂不可用，已先更新本地流程状态。');
+    } catch (error) {
+      setToast(getErrorMessage(error, '归档接口暂不可用，已先更新本地流程状态。'));
     } finally {
       setArchiveDialog(false);
       setScreen('workflow');
@@ -235,8 +303,8 @@ export default function App() {
       await apiPost(`/novels/${selectedNovel.id}/steps/${selectedStep.key}/messages`, { user_suggestion: suggestion.trim() });
       setToast('建议已发送，AI 会围绕当前步骤处理。');
       setSuggestion('');
-    } catch {
-      setToast('建议发送失败，请检查后端服务是否启动。');
+    } catch (error) {
+      setToast(getErrorMessage(error, '建议发送失败，请检查后端服务是否启动。'));
     }
   };
 
@@ -245,8 +313,8 @@ export default function App() {
     try {
       await apiPut(`/novels/${selectedNovel.id}/steps/${selectedStep.key}/draft`, { content: { suggestion, lines: stepContent?.lines ?? selectedStep.sampleContent } });
       setToast('草稿已保存，不会解锁下一步骤。');
-    } catch {
-      setToast('当前步骤草稿保存需要使用对应工作流生成接口。');
+    } catch (error) {
+      setToast(getErrorMessage(error, '当前步骤草稿保存需要使用对应工作流生成接口。'));
     }
   };
 
@@ -256,8 +324,8 @@ export default function App() {
     try {
       await apiDelete(`/novels/${novelId}`);
       setToast('小说已删除。');
-    } catch {
-      setToast('删除接口暂不可用，已先从本地列表移除。');
+    } catch (error) {
+      setToast(getErrorMessage(error, '删除接口暂不可用，已先从本地列表移除。'));
     }
   };
 
@@ -265,9 +333,9 @@ export default function App() {
     <div className="app-shell">
       <div className="phone-frame">
         {tab === 'creation' ? (
-          <main className="page">{screen === 'list' && <NovelList novels={novels} onOpen={openWorkflow} onDelete={deleteNovel} toast={toast} />}{screen === 'workflow' && selectedNovel && <WorkflowView novel={selectedNovel} onBack={() => setScreen('list')} onOpenStep={openStep} toast={toast} />}{screen === 'step' && selectedNovel && selectedStep && <StepView novel={selectedNovel} step={selectedStep} status={getStepStatus(selectedNovel, steps.findIndex((item) => item.key === selectedStep.key))} suggestion={suggestion} content={stepContent} loading={loading} onSuggestion={setSuggestion} onVoice={useVoiceInput} onSend={sendSuggestion} onSaveDraft={saveDraft} onBack={() => setScreen('workflow')} onArchive={() => setArchiveDialog(true)} onEditArchived={() => setEditDialog(true)} toast={toast} />}</main>
+          <main className="page">{screen === 'list' && <NovelList novels={novels} onOpen={openWorkflow} onCreate={createNovel} onDelete={deleteNovel} toast={toast} />}{screen === 'workflow' && selectedNovel && <WorkflowView novel={selectedNovel} onBack={() => setScreen('list')} onOpenStep={openStep} toast={toast} />}{screen === 'step' && selectedNovel && selectedStep && <StepView novel={selectedNovel} step={selectedStep} status={getStepStatus(selectedNovel, steps.findIndex((item) => item.key === selectedStep.key))} suggestion={suggestion} content={stepContent} loading={loading} onSuggestion={setSuggestion} onVoice={useVoiceInput} onSend={sendSuggestion} onSaveDraft={saveDraft} onBack={() => setScreen('workflow')} onArchive={() => setArchiveDialog(true)} onEditArchived={() => setEditDialog(true)} toast={toast} />}</main>
         ) : (
-          <ProfileView />
+          <ProfileView profile={profile} stats={profileStats} toast={toast} />
         )}
         <nav className="bottom-nav" aria-label="底部导航">
           <button className={tab === 'creation' ? 'nav-active' : ''} onClick={() => setTab('creation')}>创作中心</button>
@@ -280,7 +348,7 @@ export default function App() {
   );
 }
 
-function NovelList({ novels, onOpen, onDelete, toast }: { novels: Novel[]; onOpen: (id: number) => void; onDelete: (id: number) => void; toast: string }) {
+function NovelList({ novels, onOpen, onCreate, onDelete, toast }: { novels: Novel[]; onOpen: (id: number) => void; onCreate: () => void; onDelete: (id: number) => void; toast: string }) {
   return (
     <section className="content-pad">
       <header className="page-header">
@@ -288,7 +356,7 @@ function NovelList({ novels, onOpen, onDelete, toast }: { novels: Novel[]; onOpe
           <h1>创作中心</h1>
           <p>选择一部小说进入创作流程</p>
         </div>
-        <button className="icon-button" aria-label="创建小说"><Plus size={18} /></button>
+        <button className="icon-button" aria-label="创建小说" onClick={onCreate}><Plus size={18} /></button>
       </header>
       {toast && <div className="toast">{toast}</div>}
       <div className="card-list">
@@ -372,7 +440,9 @@ function StepView({ novel, step, status, suggestion, content, loading, onSuggest
   );
 }
 
-function ProfileView() {
+function ProfileView({ profile, stats, toast }: { profile: Profile | null; stats: ProfileStats | null; toast: string }) {
+  const visibleProfile = profile ?? { id: 0, nickname: '创作者昵称', avatar_url: '', bio: '这里将展示用户简介' };
+  const visibleStats = stats ?? { novel_count: 0, word_count: 0 };
   return (
     <main className="page content-pad">
       <header className="page-header profile-header">
@@ -381,13 +451,14 @@ function ProfileView() {
           <p>管理你的创作身份</p>
         </div>
       </header>
+      {toast && <div className="toast">{toast}</div>}
       <section className="profile-card">
         <div className="avatar"><UserRound size={24} /></div>
-        <h2>创作者昵称</h2>
-        <p>ID：--</p>
-        <p>这里将展示用户简介</p>
+        <h2>{visibleProfile.nickname}</h2>
+        <p>ID：{visibleProfile.id || '--'}</p>
+        <p>{visibleProfile.bio || '这个作者暂时还没有简介'}</p>
       </section>
-      <section className="block-card"><div className="block-title">创作数据</div><p>作品数：--</p><p>累计字数：--</p></section>
+      <section className="block-card"><div className="block-title">创作数据</div><p>作品数：{visibleStats.novel_count}</p><p>累计字数：{visibleStats.word_count}</p></section>
       <section className="block-card"><div className="block-title">更多能力</div><p>设置、会员、反馈等入口将在后续版本开放。</p></section>
     </main>
   );
@@ -445,9 +516,35 @@ async function apiDelete<T = unknown>(path: string): Promise<T> {
 async function apiRequest<T>(path: string, init: RequestInit): Promise<T> {
   const response = await fetch(`${apiBase}${path}`, init);
   if (!response.ok) {
-    throw new Error(`接口请求失败：${response.status}`);
+    // 后端统一返回中文 message；解析失败时回退状态码，保证面向前端的错误提示始终可读。
+    const payload = await safeJson<{ message?: string }>(response);
+    throw new Error(payload?.message || `接口请求失败：${response.status}`);
   }
+  // DELETE 等接口当前也返回 JSON；这里保留空响应兼容，便于后续接入无正文的下游接口。
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+
+async function safeJson<T>(response: Response): Promise<T | null> {
+  try {
+    return (await response.clone().json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function normalizeNovel(novel: NovelApiItem): Novel {
+  return {
+    id: novel.id,
+    title: novel.title,
+    genre: novel.genre || '未分类',
+    updatedAt: formatDate(novel.updated_at),
+    archivedCount: novel.archived_count ?? 0,
+  };
 }
 
 function normalizeStepContent(step: StepConfig, payload: Record<string, unknown>): StepContent {
