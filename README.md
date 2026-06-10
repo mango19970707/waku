@@ -47,7 +47,7 @@ DB_LOG_LEVEL=info
 DB_DATA_PATH=./data/waku.db         # SQLite 数据库文件路径
 
 # 应用配置
-APP_PORT=8080
+APP_PORT=6060
 APP_ENV=development
 
 # AI 模型配置
@@ -79,7 +79,7 @@ database:
 
 # 应用配置
 app:
-  port: 8080
+  port: 6060
   env: development
 
 # AI 模型配置

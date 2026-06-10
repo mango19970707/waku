@@ -10,7 +10,7 @@ database:
 
 # 应用配置
 app:
-  port: 8080
+  port: 6060
   env: development  # development, production
 
 # AI 模型配置

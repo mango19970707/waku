@@ -99,7 +99,7 @@ func Load(path string) (*Config, error) {
 
 	// 设置应用默认值
 	if cfg.App.Port == 0 {
-		cfg.App.Port = 8080
+		cfg.App.Port = 6060
 	}
 	if cfg.App.Env == "" {
 		cfg.App.Env = "development"

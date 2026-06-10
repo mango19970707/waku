@@ -15,6 +15,7 @@ import (
 type Server struct {
 	DB     *gorm.DB
 	Router *gin.Engine
+	Port   int
 }
 
 func NewServer(ctx context.Context, configPath string) (*Server, error) {
@@ -45,5 +46,5 @@ func NewServer(ctx context.Context, configPath string) (*Server, error) {
 		return nil, fmt.Errorf("初始化 AI 模型失败: %w", err)
 	}
 	router := NewRouter(Config{DB: db, WorkflowRunner: NewDefaultWorkflowRunner(db, chatModel)})
-	return &Server{DB: db, Router: router}, nil
+	return &Server{DB: db, Router: router, Port: cfg.App.Port}, nil
 }
